@@ -1,0 +1,17 @@
+{
+  "model_name": "ISL_Detection_V1",
+  "landmarks_size": 42,
+  "num_classes": 10,
+  "classes": [
+    "BAD",
+    "FIST",
+    "GOOD",
+    "HELLO",
+    "HELP",
+    "HOME",
+    "LOVE",
+    "NO",
+    "OK",
+    "PEACE"
+  ]
+}

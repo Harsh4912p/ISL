@@ -1,0 +1,18 @@
+# Production requirements - pre-built wheels only
+# Python 3.11 compatible
+
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Flask-JWT-Extended==4.5.2
+Flask-CORS==4.0.0
+python-dotenv==1.0.0
+psycopg2-binary==2.9.7
+numpy<2.0
+opencv-python-headless==4.8.0.76
+Pillow>=9.0.0
+requests==2.31.0
+werkzeug>=2.3.7
+gunicorn==21.2.0
+mediapipe==0.10.14
+protobuf>=3.20.3,<4.26.0
+scikit-learn>=1.0.0
