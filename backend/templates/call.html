@@ -837,15 +837,26 @@
       lblLocalName.textContent = userName + ' (You)';
 
       try {
-        // Access Local User Media (Video + Audio)
+        // Access Local User Media (Video + Audio) with mobile-optimized resolution
         localStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
           audio: true
         });
         localVideo.srcObject = localStream;
+        localVideo.play().catch(e => console.log('Local video play notice:', e));
       } catch (camErr) {
-        console.warn('Camera/mic access error:', camErr);
-        alert('Please grant camera and microphone permission to use video calling.');
+        console.warn('Camera/mic access initial error:', camErr);
+        // Fallback: Try video only if mic caused issue
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user' },
+            audio: false
+          });
+          localVideo.srcObject = localStream;
+          localVideo.play().catch(() => {});
+        } catch (vErr) {
+          console.error('Camera fallback error:', vErr);
+        }
       }
 
       // Initialize WebRTC PeerConnection
@@ -956,21 +967,24 @@
     function startAiSignDetection() {
       if (detectionInterval) clearInterval(detectionInterval);
 
-      // Sample camera frame every 650ms for smooth live recognition
-      detectionInterval = setInterval(async () => {
-        if (!isAiInterpreterActive || !localVideo || localVideo.readyState < 2) return;
+      let isDetectingLive = false;
 
+      // Sample camera frame every 750ms without overlapping network requests
+      detectionInterval = setInterval(async () => {
+        if (!isAiInterpreterActive || !localVideo || localVideo.readyState < 2 || isDetectingLive) return;
+
+        isDetectingLive = true;
         try {
-          // Draw video frame to hidden canvas
-          const w = 480;
-          const h = (localVideo.videoHeight / localVideo.videoWidth) * w || 360;
+          // Draw video frame to hidden canvas at lightweight 320x240 for fast MediaPipe hand detection
+          const w = 320;
+          const h = (localVideo.videoHeight / localVideo.videoWidth) * w || 240;
           captureCanvas.width = w;
           captureCanvas.height = h;
           const ctx = captureCanvas.getContext('2d');
           ctx.drawImage(localVideo, 0, 0, w, h);
 
-          // Convert to base64 JPEG
-          const base64Data = captureCanvas.toDataURL('image/jpeg', 0.65);
+          // Convert to base64 JPEG (quality 0.52 for ultra-fast ~14KB network transfer)
+          const base64Data = captureCanvas.toDataURL('image/jpeg', 0.52);
 
           // Send to Live Video Call detection endpoint
           const res = await fetch('/api/calls/detect-live', {
@@ -980,7 +994,7 @@
               frame: base64Data,
               room_id: currentRoomId,
               user_name: userNameInput.value.trim() || 'You',
-              min_confidence: 0.22
+              min_confidence: 0.18
             })
           });
 
@@ -996,8 +1010,10 @@
           }
         } catch (err) {
           console.warn('Live detection cycle notice:', err);
+        } finally {
+          isDetectingLive = false;
         }
-      }, 650);
+      }, 750);
     }
 
     // Draw skeletal joints on local preview overlay

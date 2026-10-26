@@ -8,6 +8,7 @@ import '../services/auth_service.dart';
 import '../services/tts_service.dart';
 import '../config/api_config.dart';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import '../core/widgets/hand_skeleton.dart';
 
 class TranslateScreen extends StatefulWidget {
@@ -152,6 +153,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
     _initializeCamera();
   }
 
+  bool _isDisposed = false;
+  bool _isLoopRunning = false;
+
   Future<void> _initializeCamera() async {
     try {
       cameras = await availableCameras();
@@ -163,8 +167,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
         _cameraController = CameraController(
           frontCamera,
-          ResolutionPreset.medium,
+          ResolutionPreset.low, // 320x240 for silky-smooth preview and rapid mobile AI inference
           enableAudio: false,
+          imageFormatGroup: ImageFormatGroup.jpeg,
         );
 
         await _cameraController!.initialize();
@@ -172,7 +177,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
         if (mounted) {
           setState(() {});
           if (widget.isActive) {
-            _startDetectionTimer();
+            _startDetectionLoop();
           }
         }
       }
@@ -186,54 +191,84 @@ class _TranslateScreenState extends State<TranslateScreen> {
     super.didUpdateWidget(oldWidget);
     if (widget.isActive != oldWidget.isActive) {
       if (widget.isActive) {
-        _startDetectionTimer();
+        _startDetectionLoop();
       } else {
+        _isLoopRunning = false;
         _frameTimer?.cancel();
         _frameTimer = null;
       }
     }
   }
 
-  void _startDetectionTimer() {
-    _frameTimer?.cancel();
-    _frameTimer = Timer.periodic(const Duration(milliseconds: 700), (timer) async {
-      if (!widget.isActive || _isDetecting || _cameraController == null || !_cameraController!.value.isInitialized) {
-        return;
-      }
+  void _startDetectionLoop() {
+    if (_isLoopRunning) return;
+    _isLoopRunning = true;
+    _runContinuousDetection();
+  }
 
-      setState(() => _isDetecting = true);
+  Future<void> _runContinuousDetection() async {
+    while (mounted && !_isDisposed && widget.isActive && _isLoopRunning) {
+      if (_cameraController != null &&
+          _cameraController!.value.isInitialized &&
+          !_isDetecting) {
+        setState(() => _isDetecting = true);
 
-      try {
-        final imageFile = await _cameraController!.takePicture();
-        final bytes = await imageFile.readAsBytes();
-        final base64Image = base64Encode(bytes);
+        try {
+          final imageFile = await _cameraController!.takePicture();
+          final bytes = await imageFile.readAsBytes();
 
-        await _detectSign(base64Image);
-      } catch (e) {
-        print('Frame capture/detection error: $e');
-      } finally {
-        if (mounted) {
-          setState(() => _isDetecting = false);
+          // Downscale & compress to ultra-lightweight JPEG (~15KB) so mobile network never chokes
+          String base64Image;
+          if (bytes.length > 60 * 1024) {
+            try {
+              final decoded = img.decodeImage(bytes);
+              if (decoded != null) {
+                final resized = img.copyResize(decoded, width: 320);
+                final compressed = img.encodeJpg(resized, quality: 55);
+                base64Image = base64Encode(compressed);
+              } else {
+                base64Image = base64Encode(bytes);
+              }
+            } catch (_) {
+              base64Image = base64Encode(bytes);
+            }
+          } else {
+            base64Image = base64Encode(bytes);
+          }
+
+          await _detectSign(base64Image);
+        } catch (e) {
+          print('Frame capture/detection notice: $e');
+        } finally {
+          if (mounted) {
+            setState(() => _isDetecting = false);
+          }
         }
       }
-    });
+      // Wait 700ms between frames to keep the camera preview buttery smooth
+      await Future.delayed(const Duration(milliseconds: 700));
+    }
+    _isLoopRunning = false;
   }
 
   Future<void> _detectSign(String base64Image) async {
     try {
       final authService = context.read<AuthService>();
+      final token = authService.accessToken;
+
+      final headers = Map<String, String>.from(ApiConfig.defaultHeaders);
+      if (token != null && token.isNotEmpty && token != 'null') {
+        headers['Authorization'] = 'Bearer $token';
+      }
 
       final response = await http.post(
         Uri.parse(ApiConfig.detectFrameEndpoint),
-        headers: {
-          ...ApiConfig.defaultHeaders,
-          'Authorization': 'Bearer ${authService.accessToken}',
-        },
+        headers: headers,
         body: jsonEncode({
           'frame': base64Image,
-          'min_confidence': 0.2
+          'min_confidence': 0.20
         }),
-      ).timeout(const Duration(seconds: 15));
+      ).timeout(const Duration(seconds: 8));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -421,6 +456,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   @override
   void dispose() {
+    _isDisposed = true;
+    _isLoopRunning = false;
     _frameTimer?.cancel();
     _cameraController?.dispose();
     super.dispose();

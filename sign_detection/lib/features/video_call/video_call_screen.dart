@@ -121,11 +121,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           ),
         );
 
-      // Grant WebRTC camera & mic permissions inside Android WebView
+      // Grant WebRTC camera & mic permissions and allow video autoplay inside Android WebView
       if (controller.platform is AndroidWebViewController) {
         AndroidWebViewController.enableDebugging(true);
-        (controller.platform as AndroidWebViewController)
-            .setOnPlatformPermissionRequest((request) {
+        final androidController = controller.platform as AndroidWebViewController;
+        androidController.setMediaPlaybackRequiresUserGesture(false);
+        androidController.setOnPlatformPermissionRequest((request) {
           request.grant();
         });
       }

@@ -48,12 +48,14 @@ class _CallsScreenState extends State<CallsScreen> {
     final authService = context.read<AuthService>();
 
     try {
+      final headers = Map<String, String>.from(ApiConfig.defaultHeaders);
+      if (authService.accessToken != null && authService.accessToken!.isNotEmpty && authService.accessToken != 'null') {
+        headers['Authorization'] = 'Bearer ${authService.accessToken}';
+      }
+
       final response = await http.post(
         Uri.parse('${ApiConfig.baseUrl}/calls/initiate'),
-        headers: {
-          ...ApiConfig.defaultHeaders,
-          'Authorization': 'Bearer ${authService.accessToken}',
-        },
+        headers: headers,
         body: jsonEncode({'receiver_id': userId}),
       );
 
@@ -115,12 +117,14 @@ class _CallsScreenState extends State<CallsScreen> {
     final authService = context.read<AuthService>();
 
     try {
+      final headers = Map<String, String>.from(ApiConfig.defaultHeaders);
+      if (authService.accessToken != null && authService.accessToken!.isNotEmpty && authService.accessToken != 'null') {
+        headers['Authorization'] = 'Bearer ${authService.accessToken}';
+      }
+
       final response = await http.get(
         Uri.parse('${ApiConfig.baseUrl}/calls/history?limit=10'),
-        headers: {
-          ...ApiConfig.defaultHeaders,
-          'Authorization': 'Bearer ${authService.accessToken}',
-        },
+        headers: headers,
       );
 
       if (response.statusCode == 200) {

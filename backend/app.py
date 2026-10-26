@@ -61,6 +61,11 @@ def create_app(config_name='development'):
     @app.before_request
     def before_request():
         try:
+            # Strip invalid / guest Bearer headers (e.g. 'Bearer null', 'Bearer undefined')
+            auth = request.headers.get('Authorization', '')
+            if auth and ('null' in auth.lower() or 'undefined' in auth.lower() or auth.strip() == 'Bearer'):
+                request.environ.pop('HTTP_AUTHORIZATION', None)
+
             request.start_time = datetime.now()
             print(f"\n{'='*60}")
             print(f"📨 INCOMING REQUEST: {datetime.now()}")

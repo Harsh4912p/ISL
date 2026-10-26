@@ -57,7 +57,7 @@ class ApiConfig {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
-    if (authToken != null) {
+    if (authToken != null && authToken!.isNotEmpty && authToken != 'null') {
       headers['Authorization'] = 'Bearer $authToken';
     }
     return headers;
@@ -127,15 +127,17 @@ class ApiService {
   }) async {
     print('🔗 Connecting to: ${ApiConfig.detectFrameEndpoint}');
 
+    final headers = Map<String, String>.from(ApiConfig.defaultHeaders);
+    if (ApiConfig.authToken != null && ApiConfig.authToken!.isNotEmpty && ApiConfig.authToken != 'null') {
+      headers['Authorization'] = 'Bearer ${ApiConfig.authToken}';
+    }
+
     final response = await http.post(
       Uri.parse(ApiConfig.detectFrameEndpoint),
-      headers: {
-        ...ApiConfig.defaultHeaders,
-        'Authorization': 'Bearer ${ApiConfig.authToken}',
-      },
+      headers: headers,
       body: jsonEncode({
         'frame': frameBase64,
-        'min_confidence': 0.5,
+        'min_confidence': 0.25,
       }),
     ).timeout(ApiConfig.receiveTimeout);
 
