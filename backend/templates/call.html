@@ -531,6 +531,13 @@
       display: none;
     }
 
+    body.is-embedded header {
+      display: none !important;
+    }
+    body.is-embedded {
+      background: #0a0b10 !important;
+    }
+
     @keyframes fadeIn {
       from { opacity: 0; transform: scale(0.96); }
       to { opacity: 1; transform: scale(1); }
@@ -721,12 +728,39 @@
     const btnEndCall = document.getElementById('btnEndCall');
     const videoGrid = document.getElementById('videoGrid');
 
-    // Auto-fill room from URL query if present (?room=ISL-XXXX)
+    // Auto-fill room and auto-join from URL query params (?room=ISL-XXXX&user=Alice&autojoin=1&app=1)
     window.addEventListener('DOMContentLoaded', () => {
       const urlParams = new URLSearchParams(window.location.search);
       const roomParam = urlParams.get('room');
+      const userParam = urlParams.get('user');
+      const autojoinParam = urlParams.get('autojoin');
+      const actionParam = urlParams.get('action');
+      const appParam = urlParams.get('app') || urlParams.get('embed');
+
+      if (appParam === '1' || appParam === 'true') {
+        document.body.classList.add('is-embedded');
+      }
+
+      if (userParam) {
+        userNameInput.value = userParam;
+      }
+
       if (roomParam) {
         roomIdInput.value = roomParam.toUpperCase();
+      }
+
+      if (actionParam === 'create') {
+        setTimeout(() => {
+          if (btnCreateRoom && !btnCreateRoom.disabled) {
+            btnCreateRoom.click();
+          }
+        }, 300);
+      } else if ((autojoinParam === '1' || autojoinParam === 'true' || actionParam === 'join') && roomParam) {
+        setTimeout(() => {
+          if (btnJoinRoom && !btnJoinRoom.disabled) {
+            btnJoinRoom.click();
+          }
+        }, 300);
       }
     });
 

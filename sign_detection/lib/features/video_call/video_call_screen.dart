@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:animate_do/animate_do.dart';
 import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import '../../config/api_config.dart';
 import '../../core/widgets/cards.dart';
 import '../../data/services/sign_detection_service.dart';
@@ -27,6 +30,10 @@ class VideoCallScreen extends StatefulWidget {
 class _VideoCallScreenState extends State<VideoCallScreen> {
   final _signDetectionService = SignDetectionService();
 
+  WebViewController? _webViewController;
+  bool _isWebViewReady = false;
+  bool _isLoading = true;
+
   CameraController? _cameraController;
   List<CameraDescription> _cameras = [];
   bool _isCameraInitialized = false;
@@ -42,7 +49,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   late TextEditingController _userNameController;
 
   DateTime? _callStartTime;
-  late Timer _durationTimer;
+  Timer? _durationTimer;
   String _callDuration = '00:00';
 
   String? _currentDetectedSign;
@@ -57,8 +64,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     _channelController = TextEditingController(text: widget.initialChannelName ?? '');
     _userNameController = TextEditingController(text: widget.initialUserName ?? 'User123');
 
-    _initCamera();
-
     if (widget.initialChannelName != null && widget.initialChannelName!.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _startCall();
@@ -66,11 +71,81 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
   }
 
-  Future<void> _initCamera() async {
+  Future<void> _startCall() async {
+    if (_channelController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a channel name or room code')),
+      );
+      return;
+    }
+
+    // Request Camera and Microphone permissions
+    try {
+      await [Permission.camera, Permission.microphone].request();
+    } catch (_) {}
+
+    setState(() {
+      _showChannelInput = false;
+      _isJoined = true;
+      _isLoading = true;
+    });
+
+    _callStartTime = DateTime.now();
+    _startCallTimer();
+
+    final roomCode = _channelController.text.trim().toUpperCase();
+    final userName = _userNameController.text.trim().isEmpty ? 'User' : _userNameController.text.trim();
+    final callUrl = '${ApiConfig.webVideoCallUrl}?room=${Uri.encodeComponent(roomCode)}&user=${Uri.encodeComponent(userName)}&autojoin=1&app=1';
+
+    try {
+      // Initialize WebRTC In-App Engine
+      final controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setBackgroundColor(const Color(0xFF0A0B10))
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onPageStarted: (url) {
+              if (mounted) setState(() => _isLoading = true);
+            },
+            onPageFinished: (url) {
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                  _isWebViewReady = true;
+                });
+              }
+            },
+            onWebResourceError: (error) {
+              debugPrint('WebView error: ${error.description}');
+            },
+          ),
+        );
+
+      // Grant WebRTC camera & mic permissions inside Android WebView
+      if (controller.platform is AndroidWebViewController) {
+        AndroidWebViewController.enableDebugging(true);
+        (controller.platform as AndroidWebViewController)
+            .setOnPlatformPermissionRequest((request) {
+          request.grant();
+        });
+      }
+
+      await controller.loadRequest(Uri.parse(callUrl));
+      if (mounted) {
+        setState(() {
+          _webViewController = controller;
+        });
+      }
+    } catch (e) {
+      debugPrint('WebView initialization error: $e, falling back to camera stream');
+      _initFallbackCamera();
+    }
+  }
+
+  Future<void> _initFallbackCamera() async {
     try {
       _cameras = await availableCameras();
       if (_cameras.isNotEmpty) {
-        // Use front-facing camera for sign detection
         final frontCam = _cameras.firstWhere(
           (c) => c.lensDirection == CameraLensDirection.front,
           orElse: () => _cameras.first,
@@ -84,41 +159,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         if (mounted) {
           setState(() => _isCameraInitialized = true);
         }
+        _startSignDetection();
       }
     } catch (e) {
-      debugPrint('Camera initialization error: $e');
+      debugPrint('Camera fallback error: $e');
     }
-  }
-
-  void _startCall() {
-    if (_channelController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter channel name')),
-      );
-      return;
-    }
-
-    setState(() {
-      _showChannelInput = false;
-      _isJoined = true;
-    });
-
-    _callStartTime = DateTime.now();
-    _startCallTimer();
-    _startSignDetection();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('✅ Connected to ${_channelController.text}! AI Sign Translation Active'),
-        backgroundColor: const Color(0xFF10B981),
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
   void _startCallTimer() {
+    _durationTimer?.cancel();
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) {
+      if (mounted && _callStartTime != null) {
         final duration = DateTime.now().difference(_callStartTime!);
         final minutes = duration.inMinutes;
         final seconds = duration.inSeconds % 60;
@@ -131,7 +182,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   void _stopCallTimer() {
-    _durationTimer.cancel();
+    _durationTimer?.cancel();
   }
 
   void _startSignDetection() {
@@ -166,7 +217,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       }
     });
 
-    // Subtitle synchronization from room every 2 seconds
+    // Subtitle synchronization from room
     _subtitleSyncTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       if (!mounted || _channelController.text.isEmpty) return;
       try {
@@ -199,15 +250,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('End Call?'),
-        content: const Text('Are you sure you want to end this call?'),
+        backgroundColor: const Color(0xFF1E1B4B),
+        title: const Text('End Call?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: const Text('Are you sure you want to leave this video call?', style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
           ),
-          TextButton(
-            onPressed: () async {
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () {
               Navigator.of(context).pop();
               _stopCallTimer();
               _stopSignDetection();
@@ -220,8 +273,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 );
               }
             },
-            child:
-                const Text('End Call', style: TextStyle(color: Color(0xFFEF4444))),
+            child: const Text('End Call', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -241,505 +293,375 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFF0A0B10),
       body: _showChannelInput
           ? _buildChannelSelectionScreen()
-          : _buildCallScreen(),
+          : _buildInAppCallScreen(),
     );
   }
 
   Widget _buildChannelSelectionScreen() {
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            FadeInUp(
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-                      Theme.of(context)
-                          .colorScheme
-                          .secondary
-                          .withValues(alpha: 0.05),
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FadeInDown(
+                child: Container(
+                  padding: const EdgeInsets.all(28),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF1E1B4B), Color(0xFF312E81)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6366F1).withOpacity(0.25),
+                        blurRadius: 30,
+                        offset: const Offset(0, 10),
+                      ),
                     ],
                   ),
-                  borderRadius: BorderRadius.circular(20),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6366F1).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.4)),
+                        ),
+                        child: const Center(
+                          child: Text('🤟', style: TextStyle(fontSize: 36)),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Live ISL Video Call',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Two-Way Video Calling with Real-Time Sign Translation & Subtitles',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, color: Colors.white70),
+                      ),
+                    ],
+                  ),
                 ),
-                child: Column(
+              ),
+              const SizedBox(height: 32),
+
+              FadeInUp(
+                delay: const Duration(milliseconds: 100),
+                child: TextField(
+                  controller: _userNameController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Your Name',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    prefixIcon: const Icon(Icons.person, color: Color(0xFF818CF8)),
+                    filled: true,
+                    fillColor: const Color(0xFF1E1B4B).withOpacity(0.6),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: Color(0xFF6366F1), width: 2),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              FadeInUp(
+                delay: const Duration(milliseconds: 150),
+                child: TextField(
+                  controller: _channelController,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: InputDecoration(
+                    labelText: 'Room Code / Channel',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    hintText: 'e.g. ISL-CALL',
+                    hintStyle: const TextStyle(color: Colors.white30),
+                    prefixIcon: const Icon(Icons.tag, color: Color(0xFF818CF8)),
+                    filled: true,
+                    fillColor: const Color(0xFF1E1B4B).withOpacity(0.6),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: Color(0xFF6366F1), width: 2),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              FadeInUp(
+                delay: const Duration(milliseconds: 200),
+                child: Row(
                   children: [
-                    Icon(
-                      Icons.video_call,
-                      size: 64,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Demo Video Call',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          final code = 'ISL-${DateTime.now().millisecondsSinceEpoch % 9000 + 1000}';
+                          _channelController.text = code;
+                          _startCall();
+                        },
+                        icon: const Icon(Icons.add_call, size: 20),
+                        label: const Text('Create Room', style: TextStyle(fontWeight: FontWeight.bold)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF10B981),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
                           ),
+                          elevation: 6,
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'With Live ISL Sign Detection!',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Colors.grey[600],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _startCall,
+                        icon: const Icon(Icons.video_call, size: 20),
+                        label: const Text('Join Call', style: TextStyle(fontWeight: FontWeight.bold)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF6366F1),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
                           ),
-                      textAlign: TextAlign.center,
+                          elevation: 6,
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 32),
-            FadeInUp(
-              delay: const Duration(milliseconds: 100),
-              child: TextField(
-                controller: _userNameController,
-                decoration: InputDecoration(
-                  labelText: 'Your Name',
-                  prefixIcon: const Icon(Icons.person),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
+              const SizedBox(height: 12),
+
+              FadeInUp(
+                delay: const Duration(milliseconds: 230),
+                child: TextButton.icon(
+                  onPressed: () {
+                    _channelController.text = 'ISL-DEMO';
+                    _startCall();
+                  },
+                  icon: const Icon(Icons.bolt, color: Color(0xFFFBBF24), size: 18),
+                  label: const Text('Quick Test Room (ISL-DEMO)', style: TextStyle(color: Color(0xFFFBBF24))),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            FadeInUp(
-              delay: const Duration(milliseconds: 150),
-              child: TextField(
-                controller: _channelController,
-                decoration: InputDecoration(
-                  labelText: 'Channel Name',
-                  hintText: 'e.g., isl-chat-1',
-                  prefixIcon: const Icon(Icons.tag),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            FadeInUp(
-              delay: const Duration(milliseconds: 200),
-              child: ElevatedButton(
-                onPressed: _startCall,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text(
-                  'Start Demo Call',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            FadeInUp(
-              delay: const Duration(milliseconds: 250),
-              child: OutlinedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text('Go Back'),
-              ),
-            ),
-            const SizedBox(height: 24),
-            FadeInUp(
-              delay: const Duration(milliseconds: 300),
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue[50],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.blue[200]!),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '📝 Features:',
-                      style: Theme.of(context).textTheme.labelLarge,
+              const SizedBox(height: 8),
+
+              FadeInUp(
+                delay: const Duration(milliseconds: 250),
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '✅ Live ISL Sign Detection\n✅ English + Hindi Translation\n✅ Call Duration Timer\n✅ Mic, Camera, Speaker Controls',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
+                  ),
+                  child: const Text('Back to Home'),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildCallScreen() {
-    return Stack(
-      children: [
-        // Main video area
-        Column(
-          children: [
-            Expanded(
-              child: Container(
-                color: Colors.grey[100],
-                child: Stack(
+  /// Full In-App WebRTC Video Call Screen with Live Subtitles Overlay
+  Widget _buildInAppCallScreen() {
+    return SafeArea(
+      child: Stack(
+        children: [
+          // 1. Primary Video Viewport (WebRTC In-App Engine)
+          if (_webViewController != null)
+            WebViewWidget(controller: _webViewController!)
+          else if (_isCameraInitialized && _cameraController != null)
+            CameraPreview(_cameraController!)
+          else
+            const Center(
+              child: CircularProgressIndicator(color: Color(0xFF6366F1)),
+            ),
+
+          // 2. Loading Indicator while connecting
+          if (_isLoading)
+            Container(
+              color: const Color(0xFF0A0B10).withOpacity(0.85),
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Mock remote participant
-                    Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 120,
-                            height: 120,
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  Theme.of(context).colorScheme.primary,
-                                  Theme.of(context)
-                                      .colorScheme
-                                      .primary
-                                      .withOpacity(0.6),
-                                ],
-                              ),
-                              borderRadius: BorderRadius.circular(60),
-                            ),
-                            child: const Center(
-                              child: Icon(
-                                Icons.people_outline,
-                                size: 56,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Demo Remote User',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ],
-                      ),
+                    CircularProgressIndicator(color: Color(0xFF6366F1)),
+                    SizedBox(height: 16),
+                    Text(
+                      'Connecting to live video call...',
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
                     ),
-
-                    // Translation overlay
-                    if (_isTranslationEnabled && _currentDetectedSign != null)
-                      Positioned(
-                        top: 16,
-                        left: 16,
-                        right: 16,
-                        child: FadeInDown(
-                          child: GlassCard(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF22C55E),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: const Text(
-                                        'ISL ON',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    const Text(
-                                      'Live Translation',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.white70,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  _currentDetectedSign!,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _getSignTranslation(_currentDetectedSign!),
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-
-                    // Call duration
-                    Positioned(
-                      top: 16,
-                      right: 16,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.6),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          _callDuration,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
+                    SizedBox(height: 6),
+                    Text(
+                      'Initializing camera & AI sign interpreter',
+                      style: TextStyle(color: Colors.white60, fontSize: 13),
                     ),
-
-                    // Local Camera Preview (Picture-in-Picture)
-                    if (_isCameraEnabled && _isCameraInitialized && _cameraController != null)
-                      Positioned(
-                        bottom: 120,
-                        right: 16,
-                        child: Container(
-                          width: 120,
-                          height: 160,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.white, width: 2),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.35),
-                                blurRadius: 12,
-                              ),
-                            ],
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: CameraPreview(_cameraController!),
-                        ),
-                      ),
                   ],
                 ),
               ),
             ),
-          ],
-        ),
 
-        // Control buttons
-        Positioned(
-          bottom: 0,
-          left: 0,
-          right: 0,
-          child: FadeInUp(
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withOpacity(0),
-                    Colors.white.withOpacity(0.95),
-                  ],
-                ),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          // 3. Top Floating App Bar
+          Positioned(
+            top: 12,
+            left: 12,
+            right: 12,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Room Code Chip
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A).withOpacity(0.85),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withOpacity(0.15)),
+                  ),
+                  child: Row(
                     children: [
-                      _ControlButton(
-                        icon: _isMicEnabled ? Icons.mic : Icons.mic_off,
-                        onPressed: () {
-                          setState(() => _isMicEnabled = !_isMicEnabled);
-                        },
-                        isActive: _isMicEnabled,
-                        label: 'Mic',
+                      const Icon(Icons.tag, size: 16, color: Color(0xFF818CF8)),
+                      const SizedBox(width: 6),
+                      Text(
+                        _channelController.text.toUpperCase(),
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                       ),
-                      _ControlButton(
-                        icon: _isCameraEnabled
-                            ? Icons.videocam
-                            : Icons.videocam_off,
-                        onPressed: () {
-                          setState(() => _isCameraEnabled = !_isCameraEnabled);
-                        },
-                        isActive: _isCameraEnabled,
-                        label: 'Camera',
-                      ),
-                      _ControlButton(
-                        icon: _isSpeakerEnabled
-                            ? Icons.volume_up
-                            : Icons.volume_off,
-                        onPressed: () {
-                          setState(() =>
-                              _isSpeakerEnabled = !_isSpeakerEnabled);
-                        },
-                        isActive: _isSpeakerEnabled,
-                        label: 'Speaker',
-                      ),
-                      _ControlButton(
-                        icon: _isTranslationEnabled
-                            ? Icons.translate
-                            : Icons.translate_outlined,
-                        onPressed: () {
-                          setState(() =>
-                              _isTranslationEnabled = !_isTranslationEnabled);
-                          if (_isTranslationEnabled) {
-                            _startSignDetection();
-                          } else {
-                            _stopSignDetection();
-                          }
-                        },
-                        isActive: _isTranslationEnabled,
-                        label: 'ISL',
-                        color: const Color(0xFF22C55E),
+                      const SizedBox(width: 8),
+                      Text(
+                        _callDuration,
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _endCall,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFEF4444),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                ),
+
+                // AI Active Badge & Leave Button
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.2),
+                        border: Border.all(color: const Color(0xFF10B981)),
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Text('End Call'),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.auto_awesome, size: 14, color: Color(0xFF10B981)),
+                          SizedBox(width: 4),
+                          Text('AI Live', style: TextStyle(color: Color(0xFF10B981), fontSize: 11, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: _endCall,
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFFEF4444),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-        ),
-      ],
-    );
-  }
 
-  String _getSignTranslation(String sign) {
-    if (_currentTranslationHi != null && _currentTranslationHi!.isNotEmpty) {
-      final en = _currentTranslationEn ?? sign;
-      return '$en (${_currentTranslationHi!})';
-    }
-    final signDetails = _signDetectionService.getSignDetails(sign);
-    if (signDetails != null) {
-      return '${signDetails.englishMeaning} (${signDetails.hindiMeaning})';
-    }
-    return sign;
-  }
-}
-
-class _ControlButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onPressed;
-  final bool isActive;
-  final String label;
-  final Color? color;
-
-  const _ControlButton({
-    required this.icon,
-    required this.onPressed,
-    required this.isActive,
-    required this.label,
-    this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onPressed,
-            borderRadius: BorderRadius.circular(32),
-            child: Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: isActive
-                    ? (color ?? const Color(0xFF5B67CA)).withOpacity(0.15)
-                    : Colors.grey[300],
-                borderRadius: BorderRadius.circular(32),
-                border: isActive
-                    ? Border.all(
-                        color: color ?? const Color(0xFF5B67CA),
-                        width: 2,
-                      )
-                    : null,
-              ),
-              child: Center(
-                child: Icon(
-                  icon,
-                  color: isActive
-                      ? (color ?? const Color(0xFF5B67CA))
-                      : Colors.grey[600],
-                  size: 24,
+          // 4. Fallback Native Sign Subtitles Card (when using native camera)
+          if (!_isWebViewReady && _isTranslationEnabled && _currentDetectedSign != null)
+            Positioned(
+              bottom: 90,
+              left: 20,
+              right: 20,
+              child: FadeInDown(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A).withOpacity(0.92),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.4)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6366F1).withOpacity(0.2),
+                        blurRadius: 20,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Text('🤟', style: TextStyle(fontSize: 24)),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _currentDetectedSign!,
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                            if (_currentTranslationHi != null)
+                              Text(
+                                _currentTranslationHi!,
+                                style: const TextStyle(fontSize: 16, color: Color(0xFFCBD5E1), fontWeight: FontWeight.w500),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: Colors.black87,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
