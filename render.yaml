@@ -7,6 +7,8 @@ services:
     buildCommand: bash build.sh
     startCommand: gunicorn -w 1 -k gthread --threads 4 --timeout 120 -b 0.0.0.0:$PORT wsgi:app
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: FLASK_ENV
         value: production
       - key: PYTHONUNBUFFERED
@@ -17,14 +19,3 @@ services:
         generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
-      # Optional: To use managed PostgreSQL, uncomment the lines below and the databases block
-      # - key: DATABASE_URL
-      #   fromDatabase:
-      #     name: isl-db
-      #     property: connectionString
-
-# Optional Free PostgreSQL Database:
-# databases:
-#   - name: isl-db
-#     plan: free
-#     postgresVersion: 15
