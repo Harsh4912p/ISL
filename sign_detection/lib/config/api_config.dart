@@ -4,7 +4,8 @@ import 'package:http/http.dart' as http;
 class ApiConfig {
   static String? authToken;
 
-  static String _baseUrl = 'http://localhost:5000/api';
+  // Live Render Production URL
+  static String _baseUrl = 'https://isl-sign-language-ai.onrender.com/api';
 
   static String get baseUrl => _baseUrl;
 
@@ -16,15 +17,16 @@ class ApiConfig {
     _baseUrl = 'http://$ipAddress:$port/api';
   }
 
-  static void useProduction(String domain, {int port = 443, bool https = true}) {
-    final protocol = https ? 'https' : 'http';
-    _baseUrl = '$protocol://$domain${port != 443 && port != 80 ? ':$port' : ''}/api';
+  static void useProduction({String domain = 'isl-sign-language-ai.onrender.com'}) {
+    _baseUrl = 'https://$domain/api';
   }
 
   static String get signDetectionUrl => '$baseUrl/detection';
   static String get authUrl => '$baseUrl/auth';
   static String get utilsUrl => '$baseUrl/utils';
   static String get translationUrl => '$baseUrl/translation';
+  static String get callsUrl => '$baseUrl/calls';
+  static String get webVideoCallUrl => '${_baseUrl.replaceAll("/api", "")}/call';
 
   static String get signupEndpoint => '$authUrl/signup';
   static String get loginEndpoint => '$authUrl/login';
