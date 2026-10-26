@@ -1,13 +1,24 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
 import 'package:animate_do/animate_do.dart';
+import 'package:http/http.dart' as http;
+import '../../config/api_config.dart';
 import '../../core/widgets/cards.dart';
 import '../../data/services/sign_detection_service.dart';
 import '../call_summary/call_summary_screen.dart';
 
 class VideoCallScreen extends StatefulWidget {
-  const VideoCallScreen({Key? key}) : super(key: key);
+  final String? initialChannelName;
+  final String? initialUserName;
+
+  const VideoCallScreen({
+    Key? key,
+    this.initialChannelName,
+    this.initialUserName,
+  }) : super(key: key);
 
   @override
   State<VideoCallScreen> createState() => _VideoCallScreenState();
@@ -16,8 +27,12 @@ class VideoCallScreen extends StatefulWidget {
 class _VideoCallScreenState extends State<VideoCallScreen> {
   final _signDetectionService = SignDetectionService();
 
+  CameraController? _cameraController;
+  List<CameraDescription> _cameras = [];
+  bool _isCameraInitialized = false;
+
   bool _isJoined = false;
-  bool _isTranslationEnabled = false;
+  bool _isTranslationEnabled = true;
   bool _isMicEnabled = true;
   bool _isCameraEnabled = true;
   bool _isSpeakerEnabled = true;
@@ -31,13 +46,48 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   String _callDuration = '00:00';
 
   String? _currentDetectedSign;
-  late Timer _detectionTimer;
+  String? _currentTranslationEn;
+  String? _currentTranslationHi;
+  Timer? _detectionTimer;
+  Timer? _subtitleSyncTimer;
 
   @override
   void initState() {
     super.initState();
-    _channelController = TextEditingController();
-    _userNameController = TextEditingController(text: 'User123');
+    _channelController = TextEditingController(text: widget.initialChannelName ?? '');
+    _userNameController = TextEditingController(text: widget.initialUserName ?? 'User123');
+
+    _initCamera();
+
+    if (widget.initialChannelName != null && widget.initialChannelName!.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _startCall();
+      });
+    }
+  }
+
+  Future<void> _initCamera() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras.isNotEmpty) {
+        // Use front-facing camera for sign detection
+        final frontCam = _cameras.firstWhere(
+          (c) => c.lensDirection == CameraLensDirection.front,
+          orElse: () => _cameras.first,
+        );
+        _cameraController = CameraController(
+          frontCam,
+          ResolutionPreset.medium,
+          enableAudio: true,
+        );
+        await _cameraController!.initialize();
+        if (mounted) {
+          setState(() => _isCameraInitialized = true);
+        }
+      }
+    } catch (e) {
+      debugPrint('Camera initialization error: $e');
+    }
   }
 
   void _startCall() {
@@ -55,11 +105,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
     _callStartTime = DateTime.now();
     _startCallTimer();
+    _startSignDetection();
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ Demo Call Started! (Mock video for now)'),
-        duration: Duration(seconds: 2),
+      SnackBar(
+        content: Text('✅ Connected to ${_channelController.text}! AI Sign Translation Active'),
+        backgroundColor: const Color(0xFF10B981),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -83,24 +135,63 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   void _startSignDetection() {
-    _detectionTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (_isTranslationEnabled && mounted) {
-        try {
-          final result = await _signDetectionService.detectSignFromFrame(
-            Uint8List(0),
-          );
-          setState(() => _currentDetectedSign = result.sign);
-        } catch (e) {
-          debugPrint('Sign detection error: $e');
+    _detectionTimer?.cancel();
+    _subtitleSyncTimer?.cancel();
+
+    // Frame capture every 1.2s for live sign recognition
+    _detectionTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) async {
+      if (!_isTranslationEnabled || !mounted) return;
+
+      try {
+        Uint8List? frameBytes;
+        if (_cameraController != null && _cameraController!.value.isInitialized) {
+          try {
+            final image = await _cameraController!.takePicture();
+            frameBytes = await image.readAsBytes();
+          } catch (_) {}
         }
+
+        final result = await _signDetectionService.detectSignFromFrame(
+          frameBytes ?? Uint8List(0),
+          roomId: _channelController.text,
+        );
+
+        if (mounted && result.sign.isNotEmpty) {
+          setState(() {
+            _currentDetectedSign = result.sign;
+          });
+        }
+      } catch (e) {
+        debugPrint('Sign detection error: $e');
       }
+    });
+
+    // Subtitle synchronization from room every 2 seconds
+    _subtitleSyncTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (!mounted || _channelController.text.isEmpty) return;
+      try {
+        final res = await http.get(
+          Uri.parse('${ApiConfig.baseUrl}/calls/subtitles/${_channelController.text}'),
+        ).timeout(const Duration(seconds: 2));
+
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          if (data['caption'] != null && mounted) {
+            final cap = data['caption'];
+            setState(() {
+              _currentDetectedSign = cap['sign'];
+              _currentTranslationEn = cap['english'];
+              _currentTranslationHi = cap['hindi'];
+            });
+          }
+        }
+      } catch (_) {}
     });
   }
 
   void _stopSignDetection() {
-    if (_detectionTimer.isActive) {
-      _detectionTimer.cancel();
-    }
+    _detectionTimer?.cancel();
+    _subtitleSyncTimer?.cancel();
     setState(() => _currentDetectedSign = null);
   }
 
@@ -143,6 +234,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     _userNameController.dispose();
     _stopCallTimer();
     _stopSignDetection();
+    _cameraController?.dispose();
     super.dispose();
   }
 
@@ -447,6 +539,29 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         ),
                       ),
                     ),
+
+                    // Local Camera Preview (Picture-in-Picture)
+                    if (_isCameraEnabled && _isCameraInitialized && _cameraController != null)
+                      Positioned(
+                        bottom: 120,
+                        right: 16,
+                        child: Container(
+                          width: 120,
+                          height: 160,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.35),
+                                blurRadius: 12,
+                              ),
+                            ],
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: CameraPreview(_cameraController!),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -551,6 +666,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   String _getSignTranslation(String sign) {
+    if (_currentTranslationHi != null && _currentTranslationHi!.isNotEmpty) {
+      final en = _currentTranslationEn ?? sign;
+      return '$en (${_currentTranslationHi!})';
+    }
     final signDetails = _signDetectionService.getSignDetails(sign);
     if (signDetails != null) {
       return '${signDetails.englishMeaning} (${signDetails.hindiMeaning})';

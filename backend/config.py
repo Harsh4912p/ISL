@@ -30,11 +30,18 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ECHO = False
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_size': 10,
-        'pool_recycle': 3600,
-        'pool_pre_ping': True,
-    }
+    
+    # Configure engine options conditionally for SQLite vs PostgreSQL
+    if SQLALCHEMY_DATABASE_URI.startswith('sqlite'):
+        SQLALCHEMY_ENGINE_OPTIONS = {
+            'pool_pre_ping': True,
+        }
+    else:
+        SQLALCHEMY_ENGINE_OPTIONS = {
+            'pool_size': 10,
+            'pool_recycle': 3600,
+            'pool_pre_ping': True,
+        }
 
     JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'jwt-secret-key-change-in-prod')
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=30)
@@ -55,23 +62,30 @@ class Config:
 class DevelopmentConfig(Config):
     DEBUG = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///sign_detection.db'
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+    }
 
 
 class ProductionConfig(Config):
     DEBUG = False
     SQLALCHEMY_DATABASE_URI = _get_production_db_url()
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_size': 5,
-        'pool_recycle': 1800,
-        'pool_pre_ping': True,
-        'max_overflow': 10,
-    }
     
-    # Only add sslmode if we are actually using a PostgreSQL database
-    if SQLALCHEMY_DATABASE_URI.startswith('postgresql://'):
-        SQLALCHEMY_ENGINE_OPTIONS['connect_args'] = {
-            'sslmode': 'allow',
+    if SQLALCHEMY_DATABASE_URI.startswith('sqlite'):
+        SQLALCHEMY_ENGINE_OPTIONS = {
+            'pool_pre_ping': True,
         }
+    else:
+        SQLALCHEMY_ENGINE_OPTIONS = {
+            'pool_size': 5,
+            'pool_recycle': 1800,
+            'pool_pre_ping': True,
+            'max_overflow': 10,
+        }
+        if SQLALCHEMY_DATABASE_URI.startswith('postgresql://'):
+            SQLALCHEMY_ENGINE_OPTIONS['connect_args'] = {
+                'sslmode': 'allow',
+            }
 
 
 class TestingConfig(Config):

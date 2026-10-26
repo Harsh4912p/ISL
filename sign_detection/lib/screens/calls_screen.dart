@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../config/api_config.dart';
+import '../features/video_call/video_call_screen.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
@@ -58,16 +59,23 @@ class _CallsScreenState extends State<CallsScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        final roomId = data['room_id'] ?? 'ISL-CALL';
 
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => VideoCallScreen(
+                initialChannelName: roomId,
+                initialUserName: authService.currentUser?.firstName ?? 'User',
+              ),
+            ),
+          );
+        }
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Calling $userName...'),
-            duration: const Duration(seconds: 2),
-          ),
+          SnackBar(content: Text('Could not start call: ${response.statusCode}')),
         );
-
-        // In real implementation, initiate WebRTC call
-        _showCallingDialog(userName, data['call_id']);
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(

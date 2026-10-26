@@ -95,7 +95,7 @@ class VideoProcessor:
         except Exception as e:
             return None, str(e)
 
-    def process_camera_frame(self, frame, min_confidence=0.5):
+    def process_camera_frame(self, frame, min_confidence=0.2):
         try:
             detector = self._get_detector()
             sign, confidence, face_res, annotated_frame = detector.process_video_frame(

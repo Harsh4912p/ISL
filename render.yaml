@@ -1,0 +1,30 @@
+services:
+  # Web Application & API Service
+  - type: web
+    name: isl-sign-language-ai
+    runtime: python
+    plan: free
+    buildCommand: bash build.sh
+    startCommand: gunicorn -w 1 -k gthread --threads 4 --timeout 120 -b 0.0.0.0:$PORT wsgi:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PORT
+        value: 10000
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      # Optional: To use managed PostgreSQL, uncomment the lines below and the databases block
+      # - key: DATABASE_URL
+      #   fromDatabase:
+      #     name: isl-db
+      #     property: connectionString
+
+# Optional Free PostgreSQL Database:
+# databases:
+#   - name: isl-db
+#     plan: free
+#     postgresVersion: 15

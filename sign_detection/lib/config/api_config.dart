@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 class ApiConfig {
   static String? authToken;
 
-  static String _baseUrl = 'https://isl-u2qo.onrender.com/api';
+  static String _baseUrl = 'http://localhost:5000/api';
 
   static String get baseUrl => _baseUrl;
 
@@ -24,6 +24,7 @@ class ApiConfig {
   static String get signDetectionUrl => '$baseUrl/detection';
   static String get authUrl => '$baseUrl/auth';
   static String get utilsUrl => '$baseUrl/utils';
+  static String get translationUrl => '$baseUrl/translation';
 
   static String get signupEndpoint => '$authUrl/signup';
   static String get loginEndpoint => '$authUrl/login';
@@ -33,6 +34,9 @@ class ApiConfig {
   static String get detectFrameEndpoint => '$signDetectionUrl/detect-frame';
   static String get detectVideoEndpoint => '$signDetectionUrl/detect-video';
   static String get historyEndpoint => '$signDetectionUrl/history';
+
+  static String get sentenceEndpoint => '$translationUrl/sentence';
+  static String get translateEndpoint => '$translationUrl/translate';
 
   static String get learningProgressEndpoint => '$utilsUrl/learning-progress';
   static String get categoriesEndpoint => '$utilsUrl/categories';

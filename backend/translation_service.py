@@ -8,44 +8,54 @@ class TranslationService:
         self.sign_to_words = self._build_sign_to_words_map()
 
     def _load_translations(self) -> Dict:
+        translations = {}
         try:
-            labels_file = Path('models/sign_labels.json')
-            if labels_file.exists():
-                with open(labels_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            from dataset_loader import DatasetLoader
+            loader = DatasetLoader()
+            dataset = loader.load_sign_language_dataset()
+            for idx, item in enumerate(dataset):
+                translations[str(idx)] = {
+                    'english': item['name'],
+                    'hindi': item.get('hindi_translation', item['name']),
+                    'marathi': item.get('marathi_translation', item['name']),
+                    'words': [item['name'].lower()]
+                }
+            if translations:
+                return translations
         except Exception as e:
-            print(f"Warning: Could not load translations: {e}")
+            print(f"Notice loading dataset translations: {e}")
         return self._get_default_translations()
 
     def _get_default_translations(self) -> Dict:
         return {
-            '0': {'english': 'Hello', 'hindi': 'नमस्ते', 'words': ['hello', 'greetings', 'hi']},
-            '1': {'english': 'Thank You', 'hindi': 'धन्यवाद', 'words': ['thank', 'thanks', 'appreciate']},
-            '2': {'english': 'Yes', 'hindi': 'हाँ', 'words': ['yes', 'yeah', 'affirmative']},
-            '3': {'english': 'No', 'hindi': 'नहीं', 'words': ['no', 'nope', 'negative']},
-            '4': {'english': 'Water', 'hindi': 'पानी', 'words': ['water', 'drink', 'liquid']},
-            '5': {'english': 'Food', 'hindi': 'खाना', 'words': ['food', 'eat', 'meal']},
-            '6': {'english': 'Good', 'hindi': 'अच्छा', 'words': ['good', 'great', 'excellent']},
-            '7': {'english': 'Bad', 'hindi': 'बुरा', 'words': ['bad', 'poor', 'terrible']},
-            '8': {'english': 'Help', 'hindi': 'मदद', 'words': ['help', 'assist', 'aid']},
-            '9': {'english': 'Please', 'hindi': 'कृपया', 'words': ['please', 'request', 'ask']},
+            '0': {'english': 'Hello', 'hindi': 'नमस्ते', 'marathi': 'नमस्कार', 'words': ['hello', 'greetings', 'hi']},
+            '1': {'english': 'Thank You', 'hindi': 'धन्यवाद', 'marathi': 'धन्यवाद', 'words': ['thank', 'thanks']},
+            '2': {'english': 'Yes', 'hindi': 'हाँ', 'marathi': 'होय', 'words': ['yes']},
+            '3': {'english': 'No', 'hindi': 'नहीं', 'marathi': 'नाही', 'words': ['no']},
+            '4': {'english': 'Water', 'hindi': 'पानी', 'marathi': 'पाणी', 'words': ['water']},
+            '5': {'english': 'Food', 'hindi': 'खाना', 'marathi': 'जेवण', 'words': ['food', 'eat']},
+            '6': {'english': 'Good', 'hindi': 'अच्छा', 'marathi': 'चांगले', 'words': ['good']},
+            '7': {'english': 'Bad', 'hindi': 'बुरा', 'marathi': 'वाईट', 'words': ['bad']},
+            '8': {'english': 'Help', 'hindi': 'मदद', 'marathi': 'मदत', 'words': ['help']},
+            '9': {'english': 'Please', 'hindi': 'कृपया', 'marathi': 'कृपया', 'words': ['please']},
         }
 
-    def _build_sign_to_words_map(self) -> Dict[str, List[str]]:
+    def _build_sign_to_words_map(self) -> Dict[str, Dict]:
         sign_map = {}
         for sign_id, trans in self.translations.items():
             english = trans.get('english', '')
             words = trans.get('words', [english.lower()])
             sign_map[english.lower()] = {
                 'english': english,
-                'hindi': trans.get('hindi', ''),
+                'hindi': trans.get('hindi', english),
+                'marathi': trans.get('marathi', english),
                 'variations': words
             }
         return sign_map
 
     def translate_sign(self, sign_name: str, target_language: str = 'english') -> str:
-        """Translate a single sign to target language"""
-        sign_lower = sign_name.lower()
+        """Translate a single sign to target language ('english', 'hindi', 'marathi')"""
+        sign_lower = sign_name.lower().strip()
 
         for sign_id, trans in self.translations.items():
             if trans.get('english', '').lower() == sign_lower:
@@ -58,18 +68,73 @@ class TranslationService:
         return sign_name
 
     def build_sentence(self, signs: List[str], target_language: str = 'english') -> str:
-        """Build a sentence from detected signs"""
-        translations = []
+        """Build a smooth, natural sentence from detected signs"""
+        if not signs:
+            return ""
 
-        for sign in signs:
-            trans = self.translate_sign(sign, target_language)
-            if trans:
-                translations.append(trans)
+        clean_signs = [s.strip() for s in signs if s.strip()]
+        if not clean_signs:
+            return ""
 
-        if target_language == 'hindi':
-            return ' '.join(translations)
-        else:
-            return ' '.join(translations)
+        upper_seq = " ".join([s.upper() for s in clean_signs])
+
+        # Common ISL idiom patterns smoothed to natural sentences
+        idioms = {
+            'WATER DRINK': {
+                'english': 'I want to drink water.',
+                'hindi': 'मुझे पानी पीना है।',
+                'marathi': 'मला पाणी प्यायचे आहे.'
+            },
+            'FOOD EAT': {
+                'english': 'I want to eat food.',
+                'hindi': 'मुझे खाना खाना है।',
+                'marathi': 'मला जेवण करायचे आहे.'
+            },
+            'PLEASE HELP': {
+                'english': 'Please help me.',
+                'hindi': 'कृपया मेरी मदद करें।',
+                'marathi': 'कृपया मला मदत करा.'
+            },
+            'HELLO DOCTOR HELP': {
+                'english': 'Hello Doctor, please help me.',
+                'hindi': 'नमस्ते डॉक्टर, कृपया मेरी मदद करें।',
+                'marathi': 'नमस्कार डॉक्टर, कृपया मला मदत करा.'
+            },
+            'HELLO HOW ARE YOU': {
+                'english': 'Hello, how are you?',
+                'hindi': 'नमस्ते, आप कैसे हैं?',
+                'marathi': 'नमस्कार, तुम्ही कसे आहात?'
+            },
+            'THANK YOU GOODBYE': {
+                'english': 'Thank you and goodbye!',
+                'hindi': 'धन्यवाद और अलविदा!',
+                'marathi': 'धन्यवाद आणि पुन्हा भेटू!'
+            }
+        }
+
+        for idiom_key, idiom_trans in idioms.items():
+            if idiom_key in upper_seq:
+                return idiom_trans.get(target_language, idiom_trans['english'])
+
+        # General word-by-word sentence formation
+        translated_words = []
+        for sign in clean_signs:
+            t = self.translate_sign(sign, target_language)
+            if t:
+                translated_words.append(t)
+
+        sentence = " ".join(translated_words)
+        if target_language == 'english' and sentence:
+            sentence = sentence[0].upper() + sentence[1:]
+        return sentence
+
+    def translate_all(self, signs: List[str]) -> Dict[str, str]:
+        """Translate a sign sequence into English, Hindi, and Marathi sentences"""
+        return {
+            'english': self.build_sentence(signs, 'english'),
+            'hindi': self.build_sentence(signs, 'hindi'),
+            'marathi': self.build_sentence(signs, 'marathi')
+        }
 
     def detect_paragraph_signs(self, detected_signs: List[Dict]) -> Dict:
         """Process multiple detected signs and build a paragraph"""
@@ -84,11 +149,13 @@ class TranslationService:
 
         english_paragraph = self.build_sentence(unique_signs, 'english')
         hindi_paragraph = self.build_sentence(unique_signs, 'hindi')
+        marathi_paragraph = self.build_sentence(unique_signs, 'marathi')
 
         return {
             'signs': unique_signs,
             'english_paragraph': english_paragraph,
             'hindi_paragraph': hindi_paragraph,
+            'marathi_paragraph': marathi_paragraph,
             'total_signs': len(unique_signs),
             'total_detections': len(detected_signs)
         }

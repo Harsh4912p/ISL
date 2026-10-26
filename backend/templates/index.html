@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ISL AI - Real-Time Indian Sign Language Detection & Video Call</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090a10;
+      --card-bg: rgba(22, 27, 46, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #6366f1;
+      --primary-glow: rgba(99, 102, 241, 0.4);
+      --accent: #a855f7;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Outfit', 'Inter', sans-serif;
+    }
+
+    body {
+      background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #090a10 80%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 20px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(9, 10, 16, 0.8);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: #fff;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      box-shadow: 0 0 25px var(--primary-glow);
+    }
+
+    .brand-text h1 {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .brand-text p {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .hero {
+      flex: 1;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 60px 24px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 30px;
+      font-size: 13px;
+      color: #a5b4fc;
+      font-weight: 600;
+      margin-bottom: 24px;
+    }
+
+    .hero h2 {
+      font-size: clamp(32px, 5vw, 56px);
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 20px;
+      letter-spacing: -1px;
+    }
+
+    .gradient-text {
+      background: linear-gradient(135deg, #a5b4fc, #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      max-width: 680px;
+      font-size: 18px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 40px;
+    }
+
+    .action-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      justify-content: center;
+      margin-bottom: 60px;
+    }
+
+    .btn {
+      padding: 16px 32px;
+      border-radius: 14px;
+      font-size: 16px;
+      font-weight: 600;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      transition: all 0.25s;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: #fff;
+      box-shadow: 0 10px 30px var(--primary-glow);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 40px var(--primary-glow);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: #fff;
+      border: 1px solid var(--card-border);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      width: 100%;
+      text-align: left;
+    }
+
+    .feature-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 28px;
+      transition: transform 0.2s;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-4px);
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: rgba(99, 102, 241, 0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      margin-bottom: 16px;
+    }
+
+    .feature-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .feature-card p {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 0;
+    }
+
+    footer {
+      padding: 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--card-border);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <a href="/" class="brand">
+      <div class="brand-icon">🤟</div>
+      <div class="brand-text">
+        <h1>ISL AI Server</h1>
+        <p>Indian Sign Language AI & Video Call</p>
+      </div>
+    </a>
+    <div>
+      <a href="/call" class="btn btn-primary" style="padding: 10px 20px; font-size: 14px;">
+        📹 Start Video Call
+      </a>
+    </div>
+  </header>
+
+  <main class="hero">
+    <div class="hero-pill">
+      ✨ Production Server Running with WebRTC & AI Detection
+    </div>
+
+    <h2>
+      Live Video Calls with <br>
+      <span class="gradient-text">Real-Time Indian Sign Translation</span>
+    </h2>
+
+    <p>
+      Instant AI gesture recognition for Indian Sign Language (ISL). Connect over real-time peer-to-peer video calls with dynamic closed-caption subtitles translated directly to English & Hindi text.
+    </p>
+
+    <div class="action-group">
+      <a href="/call" class="btn btn-primary">
+        <span>📹</span> Launch Live Video Call
+      </a>
+      <a href="/api" class="btn btn-secondary">
+        <span>⚡</span> API Documentation
+      </a>
+      <a href="/health" class="btn btn-secondary">
+        <span>💚</span> Health Check
+      </a>
+    </div>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">📹</div>
+        <h3>WebRTC Video Calling</h3>
+        <p>Peer-to-peer real-time video calls with room codes, public STUN signaling, audio/video controls, and multi-device support.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🤟</div>
+        <h3>Live ISL Sign Detection</h3>
+        <p>MediaPipe landmark extraction + Scikit-Learn ML engine identifying ISL signs at 600ms latency directly on camera streams.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">💬</div>
+        <h3>Real-Time Subtitles & TTS</h3>
+        <p>Dynamic glassmorphism closed captions displaying English & Hindi translations with confidence score and speech voice audio.</p>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>ISL Sign Language Recognition & Translation Platform • Ready for Render Deployment</p>
+  </footer>
+
+</body>
+</html>

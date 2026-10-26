@@ -58,13 +58,50 @@ def get_sign_details(sign_name):
     except Exception as e:
         return jsonify({'error': f'Failed to fetch sign details: {str(e)}'}), 500
 
+@translation_bp.route('/sentence', methods=['POST'])
+@jwt_required(optional=True)
+def form_sentence():
+    """Form trilingual sentences from sign list"""
+    try:
+        data = request.get_json() or {}
+        signs = data.get('signs', [])
+        if not isinstance(signs, list):
+            return jsonify({'error': 'signs must be a list'}), 400
+
+        translations = translation_service.translate_all(signs)
+        
+        # Save history if logged in
+        user_id = get_jwt_identity()
+        if user_id and translations.get('english'):
+            try:
+                db.session.add(UserHistory(
+                    user_id=user_id,
+                    detected_text=translations['english'],
+                    confidence=0.9,
+                    detection_type='sentence',
+                    source='api'
+                ))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
+        return jsonify({
+            'signs': signs,
+            'english': translations['english'],
+            'hindi': translations['hindi'],
+            'marathi': translations['marathi'],
+            'sentence': translations['english']
+        }), 200
+    except Exception as e:
+        return jsonify({'error': f'Sentence formation failed: {str(e)}'}), 500
+
 @translation_bp.route('/translate', methods=['POST'])
-@jwt_required()
+@jwt_required(optional=True)
 def translate_signs():
     """Translate detected signs to target language"""
     try:
         user_id = get_jwt_identity()
-        data = request.get_json()
+        data = request.get_json() or {}
 
         if not data or 'signs' not in data:
             return jsonify({'error': 'No signs provided'}), 400
@@ -86,14 +123,18 @@ def translate_signs():
 
         sentence = translation_service.build_sentence(signs, target_language)
 
-        db.session.add(UserHistory(
-            user_id=user_id,
-            detected_text=sentence,
-            confidence=0.0,
-            detection_type='translation',
-            source='api'
-        ))
-        db.session.commit()
+        if user_id:
+            try:
+                db.session.add(UserHistory(
+                    user_id=user_id,
+                    detected_text=sentence,
+                    confidence=0.0,
+                    detection_type='translation',
+                    source='api'
+                ))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
         return jsonify({
             'signs': signs,

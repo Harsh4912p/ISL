@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ISL Live Video Call with Real-Time Sign Translation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0a0b10;
+      --card-bg: rgba(20, 24, 38, 0.75);
+      --card-border: rgba(255, 255, 255, 0.1);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --primary-glow: rgba(99, 102, 241, 0.35);
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Outfit', 'Inter', -apple-system, sans-serif;
+    }
+
+    body {
+      background: radial-gradient(circle at 50% 10%, #1e1b4b 0%, #0a0b10 100%);
+      color: var(--text-main);
+      min-height: 100vh;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Glass Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 28px;
+      background: rgba(10, 11, 16, 0.8);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--card-border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: #fff;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--primary), #a855f7);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 0 20px var(--primary-glow);
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #fff, #cbd5e1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-badges {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 20px;
+      font-size: 13px;
+      color: #34d399;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    /* Lobby View */
+    #lobbyScreen {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .lobby-card {
+      width: 100%;
+      max-width: 480px;
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      padding: 36px 32px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+      text-align: center;
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .lobby-icon {
+      width: 68px;
+      height: 68px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      margin: 0 auto 20px auto;
+      color: var(--primary);
+    }
+
+    .lobby-card h2 {
+      font-size: 26px;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .lobby-card p {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+
+    .form-group {
+      text-align: left;
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 8px;
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 13px 16px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      color: #fff;
+      font-size: 15px;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    .form-control:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 14px 20px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.2s;
+      border: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), #8b5cf6);
+      color: #fff;
+      box-shadow: 0 4px 15px var(--primary-glow);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px var(--primary-glow);
+    }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 24px 0;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .divider span {
+      padding: 0 12px;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: #f1f5f9;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    /* Call Stage View */
+    #callScreen {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      position: relative;
+      height: calc(100vh - 73px);
+      overflow: hidden;
+    }
+
+    .video-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr;
+      position: relative;
+      background: #000;
+    }
+
+    @media (min-width: 768px) {
+      .video-grid.connected {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #090a10;
+      overflow: hidden;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #localVideo {
+      transform: scaleX(-1); /* Mirror local camera */
+    }
+
+    /* Hand landmark skeleton overlay canvas */
+    #landmarkCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      transform: scaleX(-1);
+    }
+
+    /* Peer Name Tag */
+    .peer-tag {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      padding: 8px 16px;
+      background: rgba(15, 23, 42, 0.7);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 10;
+    }
+
+    /* Floating PIP Camera when in 1-peer mode */
+    .pip-local {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      width: 220px;
+      height: 140px;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      z-index: 20;
+      background: #111;
+      transition: all 0.3s;
+    }
+
+    /* LIVE SUBTITLES OVERLAY BANNER */
+    .subtitles-container {
+      position: absolute;
+      bottom: 100px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 90%;
+      max-width: 760px;
+      z-index: 30;
+      pointer-events: none;
+    }
+
+    .subtitle-card {
+      background: rgba(15, 23, 42, 0.88);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7), 0 0 30px rgba(99, 102, 241, 0.2);
+      border-radius: 20px;
+      padding: 18px 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      animation: subtitlePop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    @keyframes subtitlePop {
+      from { opacity: 0; transform: translateY(20px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .sign-badge {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, var(--primary), #8b5cf6);
+      padding: 10px 16px;
+      border-radius: 14px;
+      min-width: 90px;
+    }
+
+    .sign-badge-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: rgba(255, 255, 255, 0.8);
+      font-weight: 700;
+    }
+
+    .sign-badge-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .subtitle-content {
+      flex: 1;
+    }
+
+    .sub-english {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1.2;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sub-hindi {
+      font-size: 20px;
+      color: #cbd5e1;
+      font-weight: 500;
+      margin-top: 4px;
+    }
+
+    .subtitle-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    .meta-tag {
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #cbd5e1;
+    }
+
+    .meta-confidence {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      font-weight: 600;
+    }
+
+    /* Control Bar */
+    .controls-bar {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 24px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 40px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      z-index: 40;
+    }
+
+    .ctrl-btn {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .ctrl-btn:hover {
+      background: rgba(255, 255, 255, 0.18);
+      transform: scale(1.06);
+    }
+
+    .ctrl-btn.active {
+      background: var(--primary);
+      box-shadow: 0 0 15px var(--primary-glow);
+    }
+
+    .ctrl-btn.off {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: var(--danger);
+    }
+
+    .ctrl-btn.danger {
+      background: var(--danger);
+      border-color: var(--danger);
+      box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+    }
+
+    .ctrl-btn.danger:hover {
+      background: #dc2626;
+    }
+
+    /* Share room bar */
+    .room-info-pill {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      padding: 8px 18px;
+      border-radius: 30px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      z-index: 30;
+    }
+
+    .copy-chip {
+      background: rgba(99, 102, 241, 0.2);
+      border: 1px solid var(--primary);
+      color: #a5b4fc;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .copy-chip:hover {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    /* Hidden capture canvas */
+    #captureCanvas {
+      display: none;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.96); }
+      to { opacity: 1; transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Glass Header -->
+  <header>
+    <a href="/" class="brand">
+      <div class="brand-icon">🤟</div>
+      <div>
+        <div class="brand-title">ISL Video Call AI</div>
+        <div style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Live Sign Translation & Captions</div>
+      </div>
+    </a>
+    <div class="header-badges">
+      <div class="status-badge" id="aiStatusBadge">
+        <span class="status-dot"></span>
+        <span id="aiStatusText">AI Interpreter Ready</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- LOBBY SCREEN -->
+  <main id="lobbyScreen">
+    <div class="lobby-card">
+      <div class="lobby-icon">📹</div>
+      <h2>Start ISL Video Call</h2>
+      <p>Connect with live Indian Sign Language detection and instant English & Hindi subtitles overlay.</p>
+
+      <div class="form-group">
+        <label for="userNameInput">Your Display Name</label>
+        <input type="text" id="userNameInput" class="form-control" placeholder="Enter your name (e.g. Alice)" value="User">
+      </div>
+
+      <button id="btnCreateRoom" class="btn btn-primary">
+        <span>✨</span> Create New Call Room
+      </button>
+
+      <div class="divider">
+        <span>OR JOIN EXISTING ROOM</span>
+      </div>
+
+      <div class="form-group">
+        <label for="roomIdInput">Room Code</label>
+        <input type="text" id="roomIdInput" class="form-control" placeholder="e.g. ISL-ABC123" style="text-transform: uppercase;">
+      </div>
+
+      <button id="btnJoinRoom" class="btn btn-secondary">
+        <span>🚪</span> Join Call Room
+      </button>
+    </div>
+  </main>
+
+  <!-- VIDEO CALL STAGE -->
+  <section id="callScreen">
+    <!-- Room Info Pill -->
+    <div class="room-info-pill">
+      <span>Room: <strong id="lblRoomCode" style="color: #a5b4fc;">ISL-XXXX</strong></span>
+      <span class="copy-chip" id="btnCopyInvite">📋 Copy Link</span>
+      <span id="lblPeerCount" style="color: var(--text-muted);">1 in call</span>
+    </div>
+
+    <!-- Video Viewports -->
+    <div class="video-grid" id="videoGrid">
+      <!-- Remote Video (Full Screen / Left) -->
+      <div class="video-wrapper" id="remoteWrapper">
+        <video id="remoteVideo" autoplay playsinline></video>
+        <div class="peer-tag" id="remotePeerTag">
+          <span>👤</span> <span id="lblRemoteName">Waiting for participant...</span>
+        </div>
+      </div>
+
+      <!-- Local Video (Right / PIP) -->
+      <div class="video-wrapper" id="localWrapper">
+        <video id="localVideo" autoplay playsinline muted></video>
+        <canvas id="landmarkCanvas"></canvas>
+        <div class="peer-tag">
+          <span>🤟</span> <span id="lblLocalName">You</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- LIVE SUBTITLE OVERLAY BANNER -->
+    <div class="subtitles-container">
+      <div class="subtitle-card" id="subtitleCard" style="display: none;">
+        <div class="sign-badge">
+          <span class="sign-badge-label">SIGN</span>
+          <span class="sign-badge-title" id="subSignCode">HELLO</span>
+        </div>
+        <div class="subtitle-content">
+          <div class="sub-english">
+            <span id="subEnglishText">Hello</span>
+            <span id="subConfidencePill" class="meta-tag meta-confidence">95% Match</span>
+          </div>
+          <div class="sub-hindi" id="subHindiText">नमस्ते</div>
+          <div class="subtitle-meta">
+            <span class="meta-tag" id="subExpressionTag">😊 Expression: Happy</span>
+            <span class="meta-tag" id="subSpeakerTag">Speaker: You</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Controls Bar -->
+    <div class="controls-bar">
+      <!-- Mic Mute Button -->
+      <button class="ctrl-btn" id="btnToggleMic" title="Toggle Microphone">
+        🎤
+      </button>
+
+      <!-- Camera Toggle Button -->
+      <button class="ctrl-btn" id="btnToggleCam" title="Toggle Camera">
+        📷
+      </button>
+
+      <!-- AI Sign Interpreter Toggle -->
+      <button class="ctrl-btn active" id="btnToggleAI" title="AI Sign Detection (Active)">
+        🤟
+      </button>
+
+      <!-- Text-to-Speech Audio Toggle -->
+      <button class="ctrl-btn" id="btnToggleTTS" title="Auto Speech Voice (Disabled)">
+        🔊
+      </button>
+
+      <!-- End Call Button -->
+      <button class="ctrl-btn danger" id="btnEndCall" title="Leave Call">
+        📞
+      </button>
+    </div>
+  </section>
+
+  <!-- Hidden Frame Extraction Canvas -->
+  <canvas id="captureCanvas"></canvas>
+
+  <script>
+    // App State
+    let currentRoomId = null;
+    let currentPeerId = null;
+    let localStream = null;
+    let peerConnection = null;
+    let isInitiator = false;
+    let isAiInterpreterActive = true;
+    let isTtsActive = false;
+    let detectionInterval = null;
+    let signalingInterval = null;
+    let lastSpokenText = '';
+
+    // WebRTC ICE Configuration (Free Public Google STUN Servers)
+    const rtcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ]
+    };
+
+    // DOM Elements
+    const lobbyScreen = document.getElementById('lobbyScreen');
+    const callScreen = document.getElementById('callScreen');
+    const userNameInput = document.getElementById('userNameInput');
+    const roomIdInput = document.getElementById('roomIdInput');
+    const btnCreateRoom = document.getElementById('btnCreateRoom');
+    const btnJoinRoom = document.getElementById('btnJoinRoom');
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const landmarkCanvas = document.getElementById('landmarkCanvas');
+    const captureCanvas = document.getElementById('captureCanvas');
+    const lblRoomCode = document.getElementById('lblRoomCode');
+    const lblRemoteName = document.getElementById('lblRemoteName');
+    const lblLocalName = document.getElementById('lblLocalName');
+    const lblPeerCount = document.getElementById('lblPeerCount');
+    const btnCopyInvite = document.getElementById('btnCopyInvite');
+    const subtitleCard = document.getElementById('subtitleCard');
+    const subSignCode = document.getElementById('subSignCode');
+    const subEnglishText = document.getElementById('subEnglishText');
+    const subHindiText = document.getElementById('subHindiText');
+    const subConfidencePill = document.getElementById('subConfidencePill');
+    const subExpressionTag = document.getElementById('subExpressionTag');
+    const subSpeakerTag = document.getElementById('subSpeakerTag');
+    const btnToggleMic = document.getElementById('btnToggleMic');
+    const btnToggleCam = document.getElementById('btnToggleCam');
+    const btnToggleAI = document.getElementById('btnToggleAI');
+    const btnToggleTTS = document.getElementById('btnToggleTTS');
+    const btnEndCall = document.getElementById('btnEndCall');
+    const videoGrid = document.getElementById('videoGrid');
+
+    // Auto-fill room from URL query if present (?room=ISL-XXXX)
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        roomIdInput.value = roomParam.toUpperCase();
+      }
+    });
+
+    // Create Call Room
+    btnCreateRoom.addEventListener('click', async () => {
+      const userName = userNameInput.value.trim() || 'Host';
+      try {
+        btnCreateRoom.disabled = true;
+        btnCreateRoom.innerHTML = '<span>⏳</span> Creating room...';
+        
+        const res = await fetch('/api/calls/room/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_name: userName })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          currentRoomId = data.room_id;
+          currentPeerId = data.peer_id;
+          isInitiator = true;
+          startCallSession(userName);
+        } else {
+          alert('Failed to create room: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error connecting to signaling server: ' + err.message);
+      } finally {
+        btnCreateRoom.disabled = false;
+        btnCreateRoom.innerHTML = '<span>✨</span> Create New Call Room';
+      }
+    });
+
+    // Join Call Room
+    btnJoinRoom.addEventListener('click', async () => {
+      const userName = userNameInput.value.trim() || 'Guest';
+      const roomId = roomIdInput.value.trim().toUpperCase();
+      if (!roomId) {
+        alert('Please enter a room code');
+        return;
+      }
+      try {
+        btnJoinRoom.disabled = true;
+        btnJoinRoom.innerHTML = '<span>⏳</span> Joining room...';
+        
+        const res = await fetch('/api/calls/room/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_id: roomId, user_name: userName })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          currentRoomId = data.room_id;
+          currentPeerId = data.peer_id;
+          isInitiator = false;
+          startCallSession(userName);
+        } else {
+          alert('Failed to join room: ' + (data.error || 'Room not found'));
+        }
+      } catch (err) {
+        alert('Error connecting to signaling server: ' + err.message);
+      } finally {
+        btnJoinRoom.disabled = false;
+        btnJoinRoom.innerHTML = '<span>🚪</span> Join Call Room';
+      }
+    });
+
+    // Initialize Camera & WebRTC
+    async function startCallSession(userName) {
+      lobbyScreen.style.display = 'none';
+      callScreen.style.display = 'flex';
+      lblRoomCode.textContent = currentRoomId;
+      lblLocalName.textContent = userName + ' (You)';
+
+      try {
+        // Access Local User Media (Video + Audio)
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: true
+        });
+        localVideo.srcObject = localStream;
+      } catch (camErr) {
+        console.warn('Camera/mic access error:', camErr);
+        alert('Please grant camera and microphone permission to use video calling.');
+      }
+
+      // Initialize WebRTC PeerConnection
+      initWebRtc();
+
+      // Start Polling for Signals
+      signalingInterval = setInterval(pollSignalingMessages, 1000);
+
+      // Start Real-Time AI Sign Detection
+      startAiSignDetection();
+    }
+
+    function initWebRtc() {
+      peerConnection = new RTCPeerConnection(rtcConfig);
+
+      // Add local stream tracks to WebRTC
+      if (localStream) {
+        localStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+      }
+
+      // Handle Remote Stream arrival
+      peerConnection.ontrack = (event) => {
+        console.log('Incoming remote track:', event.streams[0]);
+        remoteVideo.srcObject = event.streams[0];
+        lblRemoteName.textContent = 'Remote Participant';
+        videoGrid.classList.add('connected');
+        lblPeerCount.textContent = '2 in call';
+      };
+
+      // Handle ICE Candidates
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendSignal('candidate', event.candidate);
+        }
+      };
+
+      // If initiator, create offer after slight delay for remote peer
+      if (isInitiator) {
+        setTimeout(async () => {
+          try {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            sendSignal('offer', offer);
+          } catch (e) {
+            console.error('Error creating offer:', e);
+          }
+        }, 1500);
+      }
+    }
+
+    // Send WebRTC Signal to Signaling Server
+    async function sendSignal(type, payload) {
+      if (!currentRoomId || !currentPeerId) return;
+      try {
+        await fetch('/api/calls/signal/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            room_id: currentRoomId,
+            sender_id: currentPeerId,
+            type: type,
+            payload: payload
+          })
+        });
+      } catch (err) {
+        console.error('Error sending signal:', err);
+      }
+    }
+
+    // Poll Signaling Server for incoming signals (Offers, Answers, ICE)
+    async function pollSignalingMessages() {
+      if (!currentRoomId || !currentPeerId) return;
+      try {
+        const res = await fetch(`/api/calls/signal/poll?room_id=${encodeURIComponent(currentRoomId)}&peer_id=${encodeURIComponent(currentPeerId)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Process incoming WebRTC signals
+        for (const msg of (data.signals || [])) {
+          if (msg.type === 'offer') {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.payload));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            sendSignal('answer', answer);
+          } else if (msg.type === 'answer') {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.payload));
+          } else if (msg.type === 'candidate') {
+            try {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(msg.payload));
+            } catch (ce) {
+              console.warn('ICE candidate addition notice:', ce);
+            }
+          }
+        }
+
+        // Sync Subtitles from remote peer
+        if (data.caption) {
+          displaySubtitle(data.caption);
+        }
+      } catch (err) {
+        console.warn('Signaling poll notice:', err);
+      }
+    }
+
+    // REAL-TIME AI SIGN DETECTION & SUBTITLE ENGINE
+    function startAiSignDetection() {
+      if (detectionInterval) clearInterval(detectionInterval);
+
+      // Sample camera frame every 650ms for smooth live recognition
+      detectionInterval = setInterval(async () => {
+        if (!isAiInterpreterActive || !localVideo || localVideo.readyState < 2) return;
+
+        try {
+          // Draw video frame to hidden canvas
+          const w = 480;
+          const h = (localVideo.videoHeight / localVideo.videoWidth) * w || 360;
+          captureCanvas.width = w;
+          captureCanvas.height = h;
+          const ctx = captureCanvas.getContext('2d');
+          ctx.drawImage(localVideo, 0, 0, w, h);
+
+          // Convert to base64 JPEG
+          const base64Data = captureCanvas.toDataURL('image/jpeg', 0.65);
+
+          // Send to Live Video Call detection endpoint
+          const res = await fetch('/api/calls/detect-live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              frame: base64Data,
+              room_id: currentRoomId,
+              user_name: userNameInput.value.trim() || 'You',
+              min_confidence: 0.22
+            })
+          });
+
+          if (!res.ok) return;
+          const result = await res.json();
+
+          // Render landmarks skeleton if detected
+          drawLandmarks(result.landmarks);
+
+          // If a sign was detected, display live subtitle
+          if (result.caption) {
+            displaySubtitle(result.caption);
+          }
+        } catch (err) {
+          console.warn('Live detection cycle notice:', err);
+        }
+      }, 650);
+    }
+
+    // Draw skeletal joints on local preview overlay
+    function drawLandmarks(landmarks) {
+      if (!landmarkCanvas || !localVideo) return;
+      const ctx = landmarkCanvas.getContext('2d');
+      landmarkCanvas.width = localVideo.videoWidth || 640;
+      landmarkCanvas.height = localVideo.videoHeight || 480;
+      ctx.clearRect(0, 0, landmarkCanvas.width, landmarkCanvas.height);
+
+      if (!landmarks || landmarks.length === 0) return;
+
+      const w = landmarkCanvas.width;
+      const h = landmarkCanvas.height;
+
+      // Draw hand points with glow
+      ctx.fillStyle = '#6366f1';
+      ctx.strokeStyle = '#a855f7';
+      ctx.lineWidth = 2;
+
+      landmarks.forEach(pt => {
+        const x = pt.x * w;
+        const y = pt.y * h;
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+
+    // Display Subtitle Card on Video Screen
+    let subtitleTimeout = null;
+    function displaySubtitle(cap) {
+      if (!cap || !cap.sign) return;
+
+      subSignCode.textContent = cap.sign.toUpperCase();
+      subEnglishText.textContent = cap.english || cap.sign;
+      subHindiText.textContent = cap.hindi || cap.sign;
+      subConfidencePill.textContent = (cap.confidence || 90) + '% Match';
+      subExpressionTag.textContent = '😊 ' + (cap.expression || 'Neutral');
+      subSpeakerTag.textContent = 'Speaker: ' + (cap.speaker || 'Caller');
+
+      subtitleCard.style.display = 'flex';
+
+      // Speak text if Text-to-Speech is enabled
+      if (isTtsActive && window.speechSynthesis && cap.english !== lastSpokenText) {
+        lastSpokenText = cap.english;
+        const utterance = new SpeechSynthesisUtterance(cap.english);
+        utterance.rate = 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+
+      // Hide subtitle after 5 seconds of silence
+      if (subtitleTimeout) clearTimeout(subtitleTimeout);
+      subtitleTimeout = setTimeout(() => {
+        subtitleCard.style.display = 'none';
+      }, 5000);
+    }
+
+    // Copy Invite Link
+    btnCopyInvite.addEventListener('click', () => {
+      const inviteUrl = window.location.origin + window.location.pathname + '?room=' + currentRoomId;
+      navigator.clipboard.writeText(inviteUrl).then(() => {
+        btnCopyInvite.textContent = '✅ Copied!';
+        setTimeout(() => btnCopyInvite.textContent = '📋 Copy Link', 2000);
+      });
+    });
+
+    // Control Toggles
+    btnToggleMic.addEventListener('click', () => {
+      if (!localStream) return;
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        btnToggleMic.classList.toggle('off', !audioTrack.enabled);
+        btnToggleMic.textContent = audioTrack.enabled ? '🎤' : '🔇';
+      }
+    });
+
+    btnToggleCam.addEventListener('click', () => {
+      if (!localStream) return;
+      const videoTrack = localStream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        btnToggleCam.classList.toggle('off', !videoTrack.enabled);
+        btnToggleCam.textContent = videoTrack.enabled ? '📷' : '🚫';
+      }
+    });
+
+    btnToggleAI.addEventListener('click', () => {
+      isAiInterpreterActive = !isAiInterpreterActive;
+      btnToggleAI.classList.toggle('active', isAiInterpreterActive);
+      btnToggleAI.classList.toggle('off', !isAiInterpreterActive);
+      document.getElementById('aiStatusText').textContent = isAiInterpreterActive ? 'AI Interpreter Ready' : 'AI Interpreter Paused';
+    });
+
+    btnToggleTTS.addEventListener('click', () => {
+      isTtsActive = !isTtsActive;
+      btnToggleTTS.classList.toggle('active', isTtsActive);
+      btnToggleTTS.title = isTtsActive ? 'Auto Speech Voice (Active)' : 'Auto Speech Voice (Disabled)';
+      if (isTtsActive) {
+        const u = new SpeechSynthesisUtterance('Sign translation voice speech enabled');
+        window.speechSynthesis.speak(u);
+      }
+    });
+
+    // End Call
+    btnEndCall.addEventListener('click', async () => {
+      if (confirm('Are you sure you want to leave this video call?')) {
+        leaveCall();
+      }
+    });
+
+    function leaveCall() {
+      if (detectionInterval) clearInterval(detectionInterval);
+      if (signalingInterval) clearInterval(signalingInterval);
+
+      if (currentRoomId && currentPeerId) {
+        fetch('/api/calls/room/leave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_id: currentRoomId, peer_id: currentPeerId })
+        }).catch(() => {});
+      }
+
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+
+      callScreen.style.display = 'none';
+      lobbyScreen.style.display = 'flex';
+      subtitleCard.style.display = 'none';
+    }
+  </script>
+</body>
+</html>

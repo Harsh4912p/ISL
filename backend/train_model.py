@@ -5,7 +5,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 from tensorflow.keras import layers, models
-from sign_detector import SignDetector
+from sign_detector import ISLSignDetector
 
 class SignLanguageModelTrainer:
     def __init__(self, model_save_path='models/sign_language_model.h5'):

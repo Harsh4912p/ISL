@@ -95,8 +95,8 @@ class SignDetectionModelTrainer:
             # Pad with 42 zeros to represent the second hand (since our model expects size of 84)
             flat_points.extend([0.0] * 42)
             
-            # Generate 150 variations per sign using Gaussian noise to teach the classifier variance
-            for _ in range(150):
+            # Generate 35 variations per sign using Gaussian noise (sufficient for high accuracy with low memory)
+            for _ in range(35):
                 # Standard deviation of 0.015 for realistic hand shake / position variance
                 noise = np.random.normal(0, 0.015, 42)
                 variant = np.array(flat_points)
@@ -109,9 +109,9 @@ class SignDetectionModelTrainer:
         return np.array(X_data), np.array(y_data)
 
     def train(self, X_train, y_train, X_val=None, y_val=None):
-        """Train a Random Forest classifier model."""
+        """Train a lightweight, high-performance Random Forest classifier model."""
         print(f"\n{'='*60}")
-        print(f"🎯 Training Scikit-Learn Model: {self.model_name}")
+        print(f"🎯 Training Lightweight Scikit-Learn Model: {self.model_name}")
         print(f"{'='*60}")
         
         # Encode labels
@@ -120,8 +120,15 @@ class SignDetectionModelTrainer:
         
         print(f"✓ Training on {len(X_train)} samples with {num_classes} classes: {list(self.label_encoder.classes_)}")
         
-        # Train Random Forest Classifier
-        self.model = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+        # Train pruned Random Forest Classifier for minimal memory footprint (< 3MB)
+        self.model = RandomForestClassifier(
+            n_estimators=45,
+            max_depth=12,
+            min_samples_split=4,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1
+        )
         self.model.fit(X_train, y_train_encoded)
         
         if X_val is not None and y_val is not None:

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models import db, SignLearningProgress, VideoSession, Sign
+from models import db, SignLearningProgress, VideoSession, Sign, User
 from dataset_loader import DatasetLoader
 from datetime import datetime
 
@@ -27,12 +27,19 @@ def get_dataset_stats():
         return jsonify({'error': f'Failed to fetch stats: {str(e)}'}), 500
 
 @utils_bp.route('/learning-progress', methods=['GET'])
-@jwt_required()
+@jwt_required(optional=True)
 def get_learning_progress():
     try:
         user_id = get_jwt_identity()
+        if not user_id:
+            user = User.query.first()
+            user_id = user.id if user else None
+
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 20, type=int)
+
+        if not user_id:
+            return jsonify({'progress': [], 'total': 0, 'pages': 1, 'current_page': 1}), 200
 
         paginated_progress = SignLearningProgress.query.filter_by(
             user_id=user_id
@@ -51,46 +58,81 @@ def get_learning_progress():
         return jsonify({'error': f'Failed to fetch progress: {str(e)}'}), 500
 
 @utils_bp.route('/learning-progress/summary', methods=['GET'])
-@jwt_required()
+@jwt_required(optional=True)
 def get_progress_summary():
     try:
         user_id = get_jwt_identity()
+        if not user_id:
+            user = User.query.first()
+            user_id = user.id if user else None
 
-        total_practiced = db.session.query(
-            db.func.sum(SignLearningProgress.times_practiced)
-        ).filter(SignLearningProgress.user_id == user_id).scalar() or 0
+        if not user_id:
+            empty_summary = {
+                'total_signs_practiced': 0,
+                'practiced_signs': 0,
+                'total_mastered': 0,
+                'mastered_signs': 0,
+                'total_practiced': 0,
+                'total_practice_sessions': 0,
+                'average_accuracy': 0.0
+            }
+            return jsonify({**empty_summary, 'summary': empty_summary, 'stats': empty_summary, 'recent': []}), 200
 
+        # Count of distinct signs practiced
+        total_signs_practiced = SignLearningProgress.query.filter(
+            SignLearningProgress.user_id == user_id,
+            SignLearningProgress.times_practiced > 0
+        ).count()
+
+        # Count of distinct signs mastered
         total_mastered = SignLearningProgress.query.filter(
             SignLearningProgress.user_id == user_id,
             SignLearningProgress.mastered == True
         ).count()
 
+        total_sessions = db.session.query(
+            db.func.sum(SignLearningProgress.times_practiced)
+        ).filter(SignLearningProgress.user_id == user_id).scalar() or 0
+
         avg_accuracy = db.session.query(
             db.func.avg(SignLearningProgress.accuracy)
-        ).filter(SignLearningProgress.user_id == user_id).scalar() or 0
+        ).filter(SignLearningProgress.user_id == user_id).scalar() or 0.0
 
         recent_progress = SignLearningProgress.query.filter_by(
             user_id=user_id
         ).order_by(
             SignLearningProgress.last_practiced.desc()
-        ).limit(5).all()
+        ).limit(10).all()
+
+        summary_data = {
+            'total_signs_practiced': total_signs_practiced,
+            'practiced_signs': total_signs_practiced,
+            'total_mastered': total_mastered,
+            'mastered_signs': total_mastered,
+            'total_practiced': total_signs_practiced,
+            'total_practice_sessions': total_sessions,
+            'average_accuracy': round(float(avg_accuracy), 1)
+        }
 
         return jsonify({
-            'total_practiced': total_practiced,
-            'total_mastered': total_mastered,
-            'average_accuracy': float(avg_accuracy),
+            **summary_data,
+            'summary': summary_data,
+            'stats': summary_data,
             'recent': [p.to_dict() for p in recent_progress]
         }), 200
 
     except Exception as e:
         return jsonify({'error': f'Failed to fetch summary: {str(e)}'}), 500
 
-@utils_bp.route('/learning-progress/<sign_id>', methods=['PUT'])
-@jwt_required()
+@utils_bp.route('/learning-progress/<sign_id>', methods=['POST', 'PUT'])
+@jwt_required(optional=True)
 def update_learning_progress(sign_id):
     try:
         user_id = get_jwt_identity()
-        data = request.get_json()
+        if not user_id:
+            user = User.query.first()
+            user_id = user.id if user else 'anonymous'
+        data = request.get_json() or {}
 
         sign = Sign.query.get(sign_id)
         if not sign:
@@ -104,23 +146,33 @@ def update_learning_progress(sign_id):
         if not progress:
             progress = SignLearningProgress(
                 user_id=user_id,
-                sign_id=sign_id
+                sign_id=sign_id,
+                times_practiced=0,
+                times_detected_correctly=0,
+                accuracy=0.0,
+                mastered=False
             )
             db.session.add(progress)
 
-        if 'times_practiced' in data:
-            progress.times_practiced += data['times_practiced']
+        if progress.times_practiced is None:
+            progress.times_practiced = 0
+        if progress.times_detected_correctly is None:
+            progress.times_detected_correctly = 0
 
-        if 'times_detected_correctly' in data:
-            progress.times_detected_correctly += data['times_detected_correctly']
+        times_inc = data.get('times_practiced', 1)
+        progress.times_practiced += times_inc
 
-            if progress.times_practiced > 0:
-                progress.accuracy = (
-                    progress.times_detected_correctly / progress.times_practiced
-                ) * 100
+        if data.get('correct') or data.get('times_detected_correctly'):
+            correct_inc = data.get('times_detected_correctly', 1)
+            progress.times_detected_correctly += correct_inc
 
-        if 'mastered' in data:
-            progress.mastered = data['mastered']
+        if progress.times_practiced > 0:
+            progress.accuracy = round(
+                (progress.times_detected_correctly / progress.times_practiced) * 100, 1
+            )
+
+        if data.get('mastered') or progress.times_detected_correctly >= 1 or progress.accuracy >= 70.0:
+            progress.mastered = True
 
         progress.last_practiced = datetime.utcnow()
 

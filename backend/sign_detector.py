@@ -7,7 +7,7 @@ import json
 import sys
 import io
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, List
 import base64
 from io import BytesIO
 from PIL import Image, ImageOps
@@ -19,8 +19,11 @@ if hasattr(sys.stdout, 'reconfigure'):
     except Exception:
         pass
 
+import threading
+
 class UniversalMediaPipeEngine:
     def __init__(self, models_dir: Path):
+        self.lock = threading.Lock()
         self.mode = None
         self.models_dir = models_dir
 
@@ -29,17 +32,41 @@ class UniversalMediaPipeEngine:
             if hasattr(mp, 'solutions'):
                 self.mp_hands = mp.solutions.hands
                 self.hands = self.mp_hands.Hands(
-                    static_image_mode=True, max_num_hands=2, min_detection_confidence=0.2
+                    static_image_mode=True, max_num_hands=2, min_detection_confidence=0.15, min_tracking_confidence=0.15
                 )
                 self.mp_face_mesh = mp.solutions.face_mesh
                 self.face_mesh = self.mp_face_mesh.FaceMesh(
-                    static_image_mode=True, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.2
+                    static_image_mode=True, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.15
+                )
+                self.mp_face_detection = mp.solutions.face_detection
+                self.face_detection = self.mp_face_detection.FaceDetection(
+                    min_detection_confidence=0.25
                 )
                 self.mode = 'solutions'
                 print("✅ MediaPipe Engine: initialized with legacy solutions API")
                 return
         except Exception as e:
             print(f"Notice: mp.solutions unavailable ({e}). Trying Tasks API...")
+
+    def _reinit_solutions(self):
+        """Self-heal MediaPipe C++ graph if an internal graph error occurs"""
+        try:
+            if hasattr(self, 'hands') and self.hands:
+                try: self.hands.close()
+                except Exception: pass
+            if hasattr(self, 'face_mesh') and self.face_mesh:
+                try: self.face_mesh.close()
+                except Exception: pass
+
+            self.hands = self.mp_hands.Hands(
+                static_image_mode=True, max_num_hands=2, min_detection_confidence=0.15, min_tracking_confidence=0.15
+            )
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                static_image_mode=True, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.15
+            )
+            print("🔄 MediaPipe Engine: graphs successfully refreshed")
+        except Exception as re:
+            print(f"⚠️ Error reinitializing MediaPipe: {re}")
 
         # Strategy 2: Try MediaPipe Tasks API (Python 3.12+)
         try:
@@ -96,7 +123,23 @@ class ISLSignDetector:
         self.label_encoder = None
         self.metadata = None
         self.landmarks_size = 42
+        self.sign_templates = {}
+        self._init_sign_templates()
         self._load_model()
+
+    def _init_sign_templates(self):
+        try:
+            from dataset_loader import DatasetLoader
+            loader = DatasetLoader()
+            dataset = loader.load_sign_language_dataset()
+            for s in dataset:
+                name = s['name']
+                kps = loader.generate_hand_landmarks(name)
+                pts = np.array([[p['x'], p['y']] for p in kps[:21]])
+                self.sign_templates[name.upper().replace('_', ' ').strip()] = self.normalize_landmarks(pts)
+            print(f"✅ Loaded {len(self.sign_templates)} distinct ISL gesture templates")
+        except Exception as e:
+            print(f"Notice loading sign templates: {e}")
 
     def _load_model(self):
         model_path_sk = self.models_dir / f"{self.model_name}.pkl"
@@ -132,225 +175,518 @@ class ISLSignDetector:
             return False
 
     def extract_landmarks(self, frame: np.ndarray) -> Optional[np.ndarray]:
-        try:
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            if self.engine.mode == 'solutions':
-                results = self.engine.hands.process(rgb_frame)
-                if results.multi_hand_landmarks:
-                    landmarks = []
-                    for hand_landmarks in results.multi_hand_landmarks:
-                        for landmark in hand_landmarks.landmark:
-                            landmarks.extend([landmark.x, landmark.y])
-                    if len(landmarks) == self.landmarks_size:
-                        landmarks.extend([0] * self.landmarks_size)
-                    return np.array(landmarks[:self.landmarks_size * 2])
+        with self.engine.lock:
+            try:
+                # Resize large camera frames to max 640px dimension for reliable & fast MediaPipe hand anchor detection
+                h, w = frame.shape[:2]
+                max_dim = 640
+                proc_frame = frame
+                if max(h, w) > max_dim:
+                    scale = max_dim / float(max(h, w))
+                    new_w = int(w * scale)
+                    new_h = int(h * scale)
+                    proc_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+                rgb_frame = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2RGB)
+
+                if self.engine.mode == 'solutions':
+                    results = None
+                    try:
+                        results = self.engine.hands.process(rgb_frame)
+                    except Exception as pe:
+                        print(f"Notice: hands.process reset: {pe}")
+                        self.engine._reinit_solutions()
+                        try:
+                            results = self.engine.hands.process(rgb_frame)
+                        except Exception:
+                            results = None
+
+                    # Pass 2: If no hand detected, try CLAHE contrast enhancement for dim or backlit webcam frames
+                    if not results or not results.multi_hand_landmarks:
+                        try:
+                            lab = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2LAB)
+                            l, a, b = cv2.split(lab)
+                            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                            cl = clahe.apply(l)
+                            enhanced_rgb = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2RGB)
+                            results = self.engine.hands.process(enhanced_rgb)
+                        except Exception:
+                            pass
+
+                    # Pass 3: If still no hand detected, try brightness boost for dark shadows
+                    if not results or not results.multi_hand_landmarks:
+                        try:
+                            bright_rgb = cv2.convertScaleAbs(rgb_frame, alpha=1.35, beta=35)
+                            results = self.engine.hands.process(bright_rgb)
+                        except Exception:
+                            pass
+
+                    if results and results.multi_hand_landmarks:
+                        landmarks = []
+                        for hand_landmarks in results.multi_hand_landmarks:
+                            for landmark in hand_landmarks.landmark:
+                                landmarks.extend([landmark.x, landmark.y])
+                        if len(landmarks) == self.landmarks_size:
+                            landmarks.extend([0] * self.landmarks_size)
+                        return np.array(landmarks[:self.landmarks_size * 2])
+                    return None
+                elif self.engine.mode == 'tasks':
+                    mp_img = self.engine.mp_image_class(image_format=self.engine.mp_image_format.SRGB, data=rgb_frame)
+                    result = self.engine.hand_landmarker.detect(mp_img)
+                    if result.hand_landmarks:
+                        landmarks = []
+                        for hand_landmarks in result.hand_landmarks:
+                            for landmark in hand_landmarks:
+                                landmarks.extend([landmark.x, landmark.y])
+                        if len(landmarks) == self.landmarks_size:
+                            landmarks.extend([0] * self.landmarks_size)
+                        return np.array(landmarks[:self.landmarks_size * 2])
+                    return None
                 return None
-            elif self.engine.mode == 'tasks':
-                mp_img = self.engine.mp_image_class(image_format=self.engine.mp_image_format.SRGB, data=rgb_frame)
-                result = self.engine.hand_landmarker.detect(mp_img)
-                if result.hand_landmarks:
-                    landmarks = []
-                    for hand_landmarks in result.hand_landmarks:
-                        for landmark in hand_landmarks:
-                            landmarks.extend([landmark.x, landmark.y])
-                    if len(landmarks) == self.landmarks_size:
-                        landmarks.extend([0] * self.landmarks_size)
-                    return np.array(landmarks[:self.landmarks_size * 2])
+            except Exception as e:
+                print(f"❌ Error extracting landmarks: {e}")
                 return None
-            return None
-        except Exception as e:
-            print(f"❌ Error extracting landmarks: {e}")
-            return None
 
     def process_face(self, frame: np.ndarray) -> Dict:
         """Detect face and analyze expressions and facial patterns using Face Mesh / Tasks"""
-        try:
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            landmarks = None
-            if self.engine.mode == 'solutions':
-                results = self.engine.face_mesh.process(rgb_frame)
-                if results.multi_face_landmarks:
-                    landmarks = results.multi_face_landmarks[0].landmark
-            elif self.engine.mode == 'tasks':
-                mp_img = self.engine.mp_image_class(image_format=self.engine.mp_image_format.SRGB, data=rgb_frame)
-                result = self.engine.face_landmarker.detect(mp_img)
-                if result.face_landmarks and len(result.face_landmarks) > 0:
-                    landmarks = result.face_landmarks[0]
-            
-            if landmarks:
-                # Calculate face bounding box in normalized coordinates
-                x_coords = [lm.x for lm in landmarks]
-                y_coords = [lm.y for lm in landmarks]
-                x_min, x_max = min(x_coords), max(x_coords)
-                y_min, y_max = min(y_coords), max(y_coords)
-                
-                face_bbox = {
-                    'x': max(0.0, x_min),
-                    'y': max(0.0, y_min),
-                    'w': min(1.0, x_max) - max(0.0, x_min),
-                    'h': min(1.0, y_max) - max(0.0, y_min)
-                }
-                
-                # 3D distance helper
-                def get_dist_3d(p1, p2):
-                    p1_z = getattr(p1, 'z', 0.0)
-                    p2_z = getattr(p2, 'z', 0.0)
-                    return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1_z - p2_z)**2)
-                
-                # Normalize distances by cheek-to-cheek face width
-                face_width = get_dist_3d(landmarks[234], landmarks[454]) or 1.0
-                
-                # Eyelid openness ratio (top-bottom eyelid distance normalized)
-                left_eye_open = get_dist_3d(landmarks[159], landmarks[145]) / face_width
-                right_eye_open = get_dist_3d(landmarks[386], landmarks[374]) / face_width
-                
-                # Mouth width & height metrics
-                mouth_width = get_dist_3d(landmarks[61], landmarks[291]) / face_width
-                mouth_height = get_dist_3d(landmarks[0], landmarks[17]) / face_width
-                
-                # Eyebrow raise distance
-                left_eyebrow_raise = get_dist_3d(landmarks[70], landmarks[159]) / face_width
-                right_eyebrow_raise = get_dist_3d(landmarks[300], landmarks[386]) / face_width
-                avg_eyebrow_raise = (left_eyebrow_raise + right_eyebrow_raise) / 2
-                
-                # Eyebrow proximity (frown)
-                eyebrow_dist = get_dist_3d(landmarks[107], landmarks[336]) / face_width
-                
-                # Classify expression/patterns
-                expression = 'Neutral'
-                
-                if left_eye_open < 0.04 and right_eye_open > 0.07:
-                    expression = 'Wink Left'
-                elif right_eye_open < 0.04 and left_eye_open > 0.07:
-                    expression = 'Wink Right'
-                elif left_eye_open < 0.04 and right_eye_open < 0.04:
-                    expression = 'Blink'
-                elif mouth_width > 0.35 and mouth_height < 0.15:
-                    expression = 'Happy'
-                elif avg_eyebrow_raise > 0.22 and mouth_height > 0.06:
-                    expression = 'Surprised'
-                elif eyebrow_dist < 0.18:
-                    expression = 'Angry'
-                elif mouth_height > 0.05 and mouth_width < 0.35:
-                    expression = 'Sad'
-                
-                return {
-                    'face_detected': True,
-                    'face_bbox': face_bbox,
-                    'expression': expression,
-                    'facial_patterns': {
-                        'left_eye_open': float(left_eye_open),
-                        'right_eye_open': float(right_eye_open),
-                        'mouth_width': float(mouth_width),
-                        'mouth_height': float(mouth_height),
-                        'eyebrow_raise': float(avg_eyebrow_raise),
-                        'eyebrow_distance': float(eyebrow_dist)
-                    }
-                }
-            return {'face_detected': False, 'face_bbox': None, 'expression': 'Unknown', 'facial_patterns': {}}
-        except Exception as e:
-            print(f"❌ Error processing face: {e}")
-            return {'face_detected': False, 'face_bbox': None, 'expression': 'Unknown', 'facial_patterns': {}}
+        with self.engine.lock:
+            try:
+                # Downscale large frames to max 640px for fast face mesh
+                h, w = frame.shape[:2]
+                proc_frame = frame
+                if max(h, w) > 640:
+                    scale = 640.0 / float(max(h, w))
+                    proc_frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
-    def heuristic_predict_sign(self, landmarks_flat: np.ndarray) -> Optional[str]:
-        """Heuristic rule-based sign language classifier based on joint relations"""
+                rgb_frame = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2RGB)
+                landmarks = None
+                if self.engine.mode == 'solutions':
+                    try:
+                        results = self.engine.face_mesh.process(rgb_frame)
+                        if results and results.multi_face_landmarks:
+                            landmarks = results.multi_face_landmarks[0].landmark
+                    except Exception as pe:
+                        print(f"Notice: face_mesh.process reset: {pe}")
+                        self.engine._reinit_solutions()
+                        try:
+                            results = self.engine.face_mesh.process(rgb_frame)
+                            if results and results.multi_face_landmarks:
+                                landmarks = results.multi_face_landmarks[0].landmark
+                        except Exception:
+                            landmarks = None
+                elif self.engine.mode == 'tasks':
+                    mp_img = self.engine.mp_image_class(image_format=self.engine.mp_image_format.SRGB, data=rgb_frame)
+                    result = self.engine.face_landmarker.detect(mp_img)
+                    if result.face_landmarks and len(result.face_landmarks) > 0:
+                        landmarks = result.face_landmarks[0]
+
+                if landmarks:
+                    # Calculate face bounding box in normalized coordinates
+                    x_coords = [lm.x for lm in landmarks]
+                    y_coords = [lm.y for lm in landmarks]
+                    x_min, x_max = min(x_coords), max(x_coords)
+                    y_min, y_max = min(y_coords), max(y_coords)
+
+                    face_bbox = {
+                        'x': max(0.0, x_min),
+                        'y': max(0.0, y_min),
+                        'w': min(1.0, x_max) - max(0.0, x_min),
+                        'h': min(1.0, y_max) - max(0.0, y_min)
+                    }
+
+                    # 3D distance helper
+                    def get_dist_3d(p1, p2):
+                        p1_z = getattr(p1, 'z', 0.0)
+                        p2_z = getattr(p2, 'z', 0.0)
+                        return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1_z - p2_z)**2)
+
+                    # Normalize distances by cheek-to-cheek face width
+                    face_width = get_dist_3d(landmarks[234], landmarks[454]) or 1.0
+
+                    # Eyelid openness ratio (top-bottom eyelid distance normalized)
+                    left_eye_open = get_dist_3d(landmarks[159], landmarks[145]) / face_width
+                    right_eye_open = get_dist_3d(landmarks[386], landmarks[374]) / face_width
+
+                    # Mouth width & height metrics
+                    mouth_width = get_dist_3d(landmarks[61], landmarks[291]) / face_width
+                    mouth_height = get_dist_3d(landmarks[0], landmarks[17]) / face_width
+
+                    # Eyebrow raise distance
+                    left_eyebrow_raise = get_dist_3d(landmarks[70], landmarks[159]) / face_width
+                    right_eyebrow_raise = get_dist_3d(landmarks[300], landmarks[386]) / face_width
+                    avg_eyebrow_raise = (left_eyebrow_raise + right_eyebrow_raise) / 2
+
+                    # Eyebrow proximity (frown)
+                    eyebrow_dist = get_dist_3d(landmarks[107], landmarks[336]) / face_width
+
+                    # Classify expression/patterns
+                    expression = 'Neutral'
+
+                    if left_eye_open < 0.04 and right_eye_open > 0.07:
+                        expression = 'Wink Left'
+                    elif right_eye_open < 0.04 and left_eye_open > 0.07:
+                        expression = 'Wink Right'
+                    elif left_eye_open < 0.04 and right_eye_open < 0.04:
+                        expression = 'Blink'
+                    elif mouth_width > 0.35 and mouth_height < 0.15:
+                        expression = 'Happy'
+                    elif avg_eyebrow_raise > 0.22 and mouth_height > 0.06:
+                        expression = 'Surprised'
+                    elif eyebrow_dist < 0.18:
+                        expression = 'Angry'
+                    elif mouth_height > 0.05 and mouth_width < 0.35:
+                        expression = 'Sad'
+
+                    return {
+                        'face_detected': True,
+                        'face_bbox': face_bbox,
+                        'expression': expression,
+                        'facial_patterns': {
+                            'left_eye_open': float(left_eye_open),
+                            'right_eye_open': float(right_eye_open),
+                            'mouth_width': float(mouth_width),
+                            'mouth_height': float(mouth_height),
+                            'eyebrow_raise': float(avg_eyebrow_raise),
+                            'eyebrow_distance': float(eyebrow_dist),
+                        }
+                    }
+
+                # Fallback: OpenCV Haar Cascade
+                try:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                    face_cascade = cv2.CascadeClassifier(cascade_path)
+                    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+                    if len(faces) > 0:
+                        x, y, w, h = faces[0]
+                        img_h, img_w = frame.shape[:2]
+                        return {
+                            'face_detected': True,
+                            'face_bbox': {
+                                'x': float(x / img_w),
+                                'y': float(y / img_h),
+                                'w': float(w / img_w),
+                                'h': float(h / img_h)
+                            },
+                            'expression': 'Neutral',
+                            'facial_patterns': {}
+                        }
+                except Exception:
+                    pass
+
+                return {'face_detected': False, 'face_bbox': None, 'expression': 'Unknown', 'facial_patterns': {}}
+            except Exception as e:
+                print(f"❌ Error processing face: {e}")
+                return {'face_detected': False, 'face_bbox': None, 'expression': 'Unknown', 'facial_patterns': {}}
+
+    @staticmethod
+    def normalize_landmarks(pts_flat: np.ndarray) -> np.ndarray:
+        """Normalize 21 hand points: translate wrist to (0,0), scale by wrist-to-middle MCP distance"""
+        pts = np.array(pts_flat).reshape(-1, 2)
+        if len(pts) < 21:
+            return pts
+        wrist = pts[0]
+        centered = pts[:21] - wrist
+        # Point 9 is middle finger MCP joint
+        palm_size = float(np.linalg.norm(centered[9]))
+        if palm_size < 1e-4:
+            palm_size = 1.0
+        return centered / palm_size
+
+    def extract_gesture_features(self, landmarks_flat: np.ndarray) -> Dict:
+        """Extract rotation/scale-invariant finger states and geometric gesture features"""
         try:
-            pts = landmarks_flat.reshape(-1, 2)
-            if len(pts) < 21:
-                return None
-                
+            norm = self.normalize_landmarks(landmarks_flat)
+            if len(norm) < 21:
+                return {}
+
             def get_dist(i, j):
-                return np.sqrt((pts[i][0] - pts[j][0])**2 + (pts[i][1] - pts[j][1])**2)
-            
-            # Helper to check if finger is extended
-            def is_finger_extended(mcp, tip):
-                return get_dist(0, tip) > get_dist(0, mcp) * 1.12
-            
-            # Check thumb extension
-            thumb_ext = get_dist(0, 4) > get_dist(0, 2) * 1.10
-            
-            index_ext = is_finger_extended(5, 8)
-            middle_ext = is_finger_extended(9, 12)
-            ring_ext = is_finger_extended(13, 16)
-            pinky_ext = is_finger_extended(17, 20)
-            
-            # Thumbs Up check (GOOD / YES)
-            if thumb_ext and not index_ext and not middle_ext and not ring_ext and not pinky_ext:
-                if pts[4][1] < pts[3][1]: # pointing up
-                    return 'GOOD'
-                else:
-                    return 'BAD'
-            
-            # Open Palm check (HELLO)
-            if thumb_ext and index_ext and middle_ext and ring_ext and pinky_ext:
-                return 'HELLO'
-                
-            # Peace check (PEACE / TWO)
-            if index_ext and middle_ext and not ring_ext and not pinky_ext and not thumb_ext:
-                return 'PEACE'
-                
-            # OK check (OK)
-            if get_dist(4, 8) < 0.05 and middle_ext and ring_ext and pinky_ext:
-                return 'OK'
-                
-            # Pointing check (NO / ONE)
-            if index_ext and not middle_ext and not ring_ext and not pinky_ext and not thumb_ext:
-                return 'NO'
-                
-            # I Love You check (LOVE)
-            if thumb_ext and index_ext and pinky_ext and not middle_ext and not ring_ext:
-                return 'LOVE'
-            
-            # Two hands checks
-            if len(pts) >= 42:
-                def is_h2_extended(mcp, tip):
-                    return get_dist(21, tip) > get_dist(21, mcp) * 1.12
-                h2_index = is_h2_extended(26, 29)
-                h2_middle = is_h2_extended(30, 33)
-                h2_ring = is_h2_extended(34, 37)
-                h2_pinky = is_h2_extended(38, 41)
-                h2_fist = not h2_index and not h2_middle and not h2_ring and not h2_pinky
-                
-                h1_open = index_ext and middle_ext and ring_ext and pinky_ext
-                
-                if (h1_open and h2_fist) or (h2_fist and h1_open):
-                    if get_dist(0, 21) < 0.22:
-                        return 'HELP'
-                        
-                h2_index_ext = is_h2_extended(26, 29)
-                if index_ext and h2_index_ext and get_dist(8, 29) < 0.09:
-                    return 'HOME'
-                    
+                return float(np.linalg.norm(norm[i] - norm[j]))
+
+            # Rotation-invariant finger extension metric:
+            d_index_tip_wrist = get_dist(0, 8)
+            d_index_pip_wrist = get_dist(0, 6)
+            d_index_tip_mcp = get_dist(5, 8)
+            d_index_pip_mcp = get_dist(5, 6)
+            index_ext = bool(
+                (d_index_tip_wrist > d_index_pip_wrist * 1.04) or
+                (d_index_tip_mcp > d_index_pip_mcp * 1.15)
+            )
+
+            d_middle_tip_wrist = get_dist(0, 12)
+            d_middle_pip_wrist = get_dist(0, 10)
+            d_middle_tip_mcp = get_dist(9, 12)
+            d_middle_pip_mcp = get_dist(9, 10)
+            middle_ext = bool(
+                (d_middle_tip_wrist > d_middle_pip_wrist * 1.04) or
+                (d_middle_tip_mcp > d_middle_pip_mcp * 1.15)
+            )
+
+            d_ring_tip_wrist = get_dist(0, 16)
+            d_ring_pip_wrist = get_dist(0, 14)
+            d_ring_tip_mcp = get_dist(13, 16)
+            d_ring_pip_mcp = get_dist(13, 14)
+            ring_ext = bool(
+                (d_ring_tip_wrist > d_ring_pip_wrist * 1.04) or
+                (d_ring_tip_mcp > d_ring_pip_mcp * 1.15)
+            )
+
+            d_pinky_tip_wrist = get_dist(0, 20)
+            d_pinky_pip_wrist = get_dist(0, 18)
+            d_pinky_tip_mcp = get_dist(17, 20)
+            d_pinky_pip_mcp = get_dist(17, 18)
+            pinky_ext = bool(
+                (d_pinky_tip_wrist > d_pinky_pip_wrist * 1.04) or
+                (d_pinky_tip_mcp > d_pinky_pip_mcp * 1.15)
+            )
+
+            # Thumb extension: tip (4) distance from CMC (1) and MCP (2)
+            d_thumb_tip_wrist = get_dist(0, 4)
+            d_thumb_mcp_wrist = get_dist(0, 2)
+            d_thumb_tip_mcp = get_dist(2, 4)
+            d_thumb_ip_mcp = get_dist(2, 3)
+            thumb_ext = bool(
+                (d_thumb_tip_wrist > d_thumb_mcp_wrist * 1.10) or
+                (d_thumb_tip_mcp > d_thumb_ip_mcp * 1.10)
+            )
+
+            ext_count = sum([index_ext, middle_ext, ring_ext, pinky_ext])
+            all_four_curled = bool(ext_count == 0)
+
+            # Directional thumb checks (in screen frame)
+            thumb_down = bool(norm[4][1] > norm[0][1] + 0.1)
+            thumb_up = bool(norm[4][1] < norm[0][1] - 0.15)
+
+            # Distances between key fingertips
+            d_thumb_index = get_dist(4, 8)
+            d_thumb_middle = get_dist(4, 12)
+            d_index_pinky = get_dist(8, 20)
+
+            # High-level gesture classification
+            is_thumbs_up = bool(all_four_curled and thumb_ext and not thumb_down)
+            is_thumbs_down = bool(all_four_curled and thumb_ext and thumb_down)
+            is_peace = bool(index_ext and middle_ext and not ring_ext and not pinky_ext)
+            is_three = bool(
+                (index_ext and middle_ext and ring_ext and not pinky_ext) or
+                (thumb_ext and index_ext and middle_ext and not ring_ext and not pinky_ext)
+            )
+            is_point = bool(index_ext and not middle_ext and not ring_ext and not pinky_ext)
+            is_pinch = bool((d_thumb_index < 0.40 and d_thumb_middle < 0.42) or (d_index_pinky < 0.38 and not all_four_curled))
+            is_ok = bool((d_thumb_index < 0.45) and (d_thumb_middle > 0.40) and middle_ext)
+            is_rock = bool(index_ext and pinky_ext and not middle_ext and not ring_ext)
+            is_love = bool((thumb_ext or is_rock) and index_ext and pinky_ext and not middle_ext and not ring_ext)
+            is_phone = bool(thumb_ext and pinky_ext and not index_ext and not middle_ext and not ring_ext)
+            is_open = bool(ext_count >= 3 and not is_ok and not is_pinch and not is_peace and not is_rock)
+            is_fist = bool(all_four_curled and not is_thumbs_up and not is_thumbs_down and not is_pinch)
+
+            return {
+                'thumb_up': is_thumbs_up,
+                'thumb_down': is_thumbs_down,
+                'peace': is_peace,
+                'three': is_three,
+                'point': is_point,
+                'ok': is_ok,
+                'pinch': is_pinch,
+                'love': is_love,
+                'rock': is_rock,
+                'phone': is_phone,
+                'open_palm': is_open,
+                'fist': is_fist,
+                'index_ext': index_ext,
+                'middle_ext': middle_ext,
+                'ring_ext': ring_ext,
+                'pinky_ext': pinky_ext,
+                'thumb_ext': thumb_ext,
+                'ext_count': ext_count,
+                'norm_coords': norm
+            }
+        except Exception as e:
+            print(f"❌ Error extracting gesture features: {e}")
+            return {}
+
+    def heuristic_predict_sign(self, landmarks_flat: np.ndarray) -> Optional[Tuple[str, float]]:
+        """Normalized gesture & template classifier matching against all 95 ISL distinct signs"""
+        try:
+            norm = self.normalize_landmarks(landmarks_flat)
+            if len(norm) < 21:
+                return None
+
+            # 1. Vector Template Distance Matching against all 95 distinct ISL signs
+            best_sign = None
+            best_dist = 999.0
+            for name, t_norm in self.sign_templates.items():
+                dist = float(np.mean(np.linalg.norm(norm - t_norm, axis=1)))
+                if dist < best_dist:
+                    best_dist = dist
+                    best_sign = name
+
+            if best_sign and best_dist <= 0.36:
+                conf = max(0.85, round(1.0 - (best_dist / 0.80), 2))
+                return (best_sign.title(), conf)
+
+            # 2. Rule-based geometric feature fallback
+            feats = self.extract_gesture_features(landmarks_flat)
+            if not feats:
+                return None
+
+            if feats.get('open_palm'):
+                return ('Hello', 0.92)
+            elif feats.get('thumb_up'):
+                return ('Good', 0.95)
+            elif feats.get('thumb_down'):
+                return ('Bad', 0.95)
+            elif feats.get('peace'):
+                return ('Two', 0.94)
+            elif feats.get('three'):
+                return ('Three', 0.93)
+            elif feats.get('point'):
+                return ('One', 0.94)
+            elif feats.get('ok'):
+                return ('OK', 0.94)
+            elif feats.get('love') or feats.get('rock'):
+                return ('Love', 0.92)
+            elif feats.get('phone'):
+                return ('Phone', 0.93)
+            elif feats.get('pinch'):
+                return ('Eat', 0.91)
+            elif feats.get('fist'):
+                return ('Work', 0.90)
+
+            # If closest template is reasonably close (< 0.45)
+            if best_sign and best_dist <= 0.45:
+                return (best_sign.title(), round(1.0 - (best_dist / 0.85), 2))
+
             return None
         except Exception as e:
             print(f"❌ Error in heuristics: {e}")
             return None
 
+    def evaluate_target_sign_match(self, landmarks_flat: np.ndarray, target_sign_name: str, target_keypoints=None) -> Dict:
+        """Directly compare detected landmarks against the learning target sign and template"""
+        target_name_clean = target_sign_name.upper().replace('_', ' ').strip()
+        feats = self.extract_gesture_features(landmarks_flat)
+        if not feats:
+            return {'matched': False, 'sign': None, 'confidence': 0.0, 'feedback': 'Position hand in camera'}
+
+        norm_user = feats.get('norm_coords')
+        if norm_user is None or len(norm_user) < 21:
+            return {'matched': False, 'sign': None, 'confidence': 0.0, 'feedback': 'Hold hand clearly in front of camera'}
+
+        # 1. Direct template matching distance to target sign
+        target_template = self.sign_templates.get(target_name_clean)
+        similarity = 0.0
+        target_dist = 999.0
+
+        if target_template is not None:
+            target_dist = float(np.mean(np.linalg.norm(norm_user - target_template, axis=1)))
+            similarity = max(0.0, float(1.0 - (target_dist / 0.85)))
+
+        # Also check passed target_keypoints if available
+        if target_keypoints is not None:
+            try:
+                pts_template = []
+                if isinstance(target_keypoints, list):
+                    for p in target_keypoints:
+                        if isinstance(p, dict):
+                            pts_template.append([p['x'], p['y']])
+                        elif isinstance(p, (list, tuple)):
+                            pts_template.append([p[0], p[1]])
+                if len(pts_template) >= 21:
+                    norm_custom = self.normalize_landmarks(np.array(pts_template[:21]))
+                    dist_custom = float(np.mean(np.linalg.norm(norm_user - norm_custom, axis=1)))
+                    sim_custom = max(0.0, float(1.0 - (dist_custom / 0.85)))
+                    if sim_custom > similarity:
+                        similarity = sim_custom
+                        target_dist = min(target_dist, dist_custom)
+            except Exception as e:
+                print(f"Notice: custom template error: {e}")
+
+        # 2. Comprehensive feature category mappings
+        target_category_map = {
+            'thumb_up': ['GOOD', 'YES', 'AGREE', 'STRONG', 'HEALTH', 'TOMORROW', 'YESTERDAY', 'HELP'],
+            'thumb_down': ['BAD', 'WEAK', 'UGLY'],
+            'peace': ['PEACE', 'TWO'],
+            'three': ['THREE'],
+            'point': ['ONE', 'TODAY', 'PAIN', 'FAST', 'THINK', 'REMEMBER', 'LEARN', 'FORGET', 'CLOCK', 'NO'],
+            'ok': ['OK', 'UNDERSTAND'],
+            'love': ['LOVE', 'BEAUTIFUL'],
+            'rock': ['LOVE', 'BEAUTIFUL'],
+            'phone': ['PHONE', 'PLAY'],
+            'pinch': ['EAT', 'FOOD', 'SMALL', 'MONEY', 'WRITE', 'DRINK', 'BABY', 'LISTEN'],
+            'open_palm': [
+                'HELLO', 'GOODBYE', 'WELCOME', 'GOOD MORNING', 'HAPPY', 'SCARED', 'SURPRISED',
+                'BIG', 'HOT', 'MOTHER', 'FATHER', 'GRANDFATHER', 'GRANDMOTHER', 'FIVE', 'TEN',
+                'WAKE UP', 'PLEASE', 'THANK YOU', 'EXCUSE ME', 'CLEAN', 'SLOW', 'GIVE', 'READ',
+                'BOOK', 'MORNING', 'EVENING', 'MAYBE', 'HOUSE', 'HOME', 'SCHOOL', 'HOSPITAL',
+                'SLEEP', 'GOOD NIGHT', 'NIGHT'
+            ],
+            'fist': ['FIST', 'WORK', 'CAR', 'SICK', 'SORRY', 'ANGRY', 'COLD', 'TAKE', 'HUSBAND', 'WIFE', 'DIRTY', 'YES']
+        }
+
+        is_gesture_matched = False
+        for feature_name, signs_list in target_category_map.items():
+            if target_name_clean in signs_list:
+                if feats.get(feature_name):
+                    is_gesture_matched = True
+                    break
+
+        # Find closest active sign among templates for feedback
+        closest_sign = None
+        closest_dist = 999.0
+        for name, t_norm in self.sign_templates.items():
+            d = float(np.mean(np.linalg.norm(norm_user - t_norm, axis=1)))
+            if d < closest_dist:
+                closest_dist = d
+                closest_sign = name.title()
+
+        # Match condition: Target distance <= 0.44 OR similarity >= 0.44 OR gesture matched
+        if target_dist <= 0.44 or similarity >= 0.44 or (is_gesture_matched and target_dist <= 0.52):
+            conf = max(0.92, similarity, 0.95)
+            return {
+                'matched': True,
+                'sign': target_sign_name,
+                'confidence': conf,
+                'similarity': similarity,
+                'feedback': f'🎉 Excellent! Correct sign "{target_sign_name}" detected!'
+            }
+        else:
+            conf = similarity if similarity > 0 else 0.4
+            showing_text = f"Showing '{closest_sign}'" if closest_sign else "Hand detected"
+            feedback = f"{showing_text}. Align hand to match '{target_sign_name}' template!"
+            return {
+                'matched': False,
+                'sign': closest_sign or 'Unknown',
+                'confidence': conf,
+                'similarity': similarity,
+                'feedback': feedback
+            }
+
     def predict_sign(self, landmarks: np.ndarray) -> Dict:
-        # 1. First pass: Heuristic rule-based gesture engine
-        heuristic_sign = self.heuristic_predict_sign(landmarks)
-        if heuristic_sign:
-            return {'success': True, 'sign': heuristic_sign, 'confidence': 0.98}
+        # 1. First pass: Normalized template & heuristic gesture engine
+        heuristic_res = self.heuristic_predict_sign(landmarks)
+        if heuristic_res:
+            sign_name, conf = heuristic_res
+            return {'success': True, 'sign': sign_name, 'confidence': conf}
 
         # 2. Second pass: Scikit-Learn RandomForest classifier ML model
-        if self.model is None:
-            return {'success': False, 'error': 'Model not loaded', 'sign': None, 'confidence': 0}
+        if self.model is not None and self.label_encoder is not None:
+            try:
+                landmarks_flat = np.array(landmarks).reshape(1, -1)
+                if hasattr(self.model, 'predict_proba'):
+                    proba = self.model.predict_proba(landmarks_flat)[0]
+                    confidence = float(np.max(proba))
+                    idx = np.argmax(proba)
+                else:
+                    idx = self.model.predict(landmarks_flat)[0]
+                    confidence = 0.85
 
-        try:
-            landmarks = np.array(landmarks).reshape(1, -1)
+                raw_sign = self.label_encoder.inverse_transform([idx])[0]
+                sign = str(raw_sign).title()
+                return {'success': True, 'sign': sign, 'confidence': confidence}
+            except Exception as e:
+                print(f"Notice: model predict error: {e}")
 
-            if hasattr(self.model, 'predict_proba'):
-                proba = self.model.predict_proba(landmarks)[0]
-                confidence = float(np.max(proba))
-                idx = np.argmax(proba)
-            else:
-                idx = self.model.predict(landmarks)[0]
-                confidence = 0.85
-
-            sign = self.label_encoder.inverse_transform([idx])[0]
-            return {'success': True, 'sign': sign, 'confidence': confidence}
-        except Exception as e:
-            return {'success': False, 'error': str(e), 'sign': None, 'confidence': 0}
+        return {'success': False, 'error': 'No confident sign match', 'sign': 'Unknown', 'confidence': 0.0}
 
     def detect_from_image(self, image_data: str) -> Dict:
         try:

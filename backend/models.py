@@ -221,6 +221,19 @@ class SignLearningProgress(db.Model):
     user = db.relationship('User', backref='learning_progress')
     sign = db.relationship('Sign', backref='learning_progress')
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.times_practiced is None:
+            self.times_practiced = 0
+        if self.times_detected_correctly is None:
+            self.times_detected_correctly = 0
+        if self.accuracy is None:
+            self.accuracy = 0.0
+        if self.mastered is None:
+            self.mastered = False
+        if self.id is None:
+            self.id = str(uuid.uuid4())
+
     def to_dict(self):
         return {
             'id': self.id,

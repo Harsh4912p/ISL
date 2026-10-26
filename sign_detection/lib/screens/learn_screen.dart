@@ -100,7 +100,30 @@ class _LearnScreenState extends State<LearnScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        setState(() => learningStats = data['summary'] ?? data['stats'] ?? {});
+        final stats = (data['summary'] is Map)
+            ? data['summary']
+            : ((data['stats'] is Map) ? data['stats'] : data);
+        if (mounted) {
+          setState(() => learningStats = Map<String, dynamic>.from(stats ?? {}));
+        }
+      } else {
+        // Fallback to learning module summary
+        final fallbackRes = await http.get(
+          Uri.parse('${ApiConfig.baseUrl}/learning/summary'),
+          headers: {
+            ...ApiConfig.defaultHeaders,
+            'Authorization': 'Bearer ${authService.accessToken}',
+          },
+        );
+        if (fallbackRes.statusCode == 200) {
+          final data = jsonDecode(fallbackRes.body);
+          final stats = (data['summary'] is Map)
+              ? data['summary']
+              : ((data['stats'] is Map) ? data['stats'] : data);
+          if (mounted) {
+            setState(() => learningStats = Map<String, dynamic>.from(stats ?? {}));
+          }
+        }
       }
     } catch (e) {
       print('Error loading progress: $e');
@@ -115,6 +138,24 @@ class _LearnScreenState extends State<LearnScreen> {
     } else {
       return sign['english_translation'] ?? '';
     }
+  }
+
+  Widget _buildFingerLegend(String name, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          name,
+          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87),
+        ),
+      ],
+    );
   }
 
   void _showSignDetails(Map<String, dynamic> sign) {
@@ -194,16 +235,77 @@ class _LearnScreenState extends State<LearnScreen> {
               ),
               const SizedBox(height: 16),
               
-              // Skeleton Hand Drawing
-              Center(
-                child: HandSkeletonWidget(
-                  keypoints: sign['keypoints_data'],
-                  width: 180,
-                  height: 180,
-                ),
+              // Realistic Hand Gesture Illustration
+              StatefulBuilder(
+                builder: (context, setModalState) {
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFBF8F5),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: Colors.deepPurple.shade100, width: 1.2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.deepPurple.shade50.withOpacity(0.5),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: const [
+                                Icon(Icons.pan_tool_rounded, size: 18, color: Colors.deepPurple),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Proper Hand Gesture / हस्त मुद्रा ✋',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.deepPurple,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Center(
+                          child: HandSkeletonWidget(
+                            keypoints: sign['keypoints_data'],
+                            width: 200,
+                            height: 200,
+                            backgroundColor: const Color(0xFFFAF5F0),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.deepPurple.shade50,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Text(
+                            'Realistic Anatomical ISL Hand Shape',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.deepPurple,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
               
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
               const Text(
                 'How to perform gesture:',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.grey),
@@ -221,15 +323,14 @@ class _LearnScreenState extends State<LearnScreen> {
                 child: ElevatedButton.icon(
                   onPressed: () async {
                     Navigator.of(context).pop(); // Close bottom sheet
-                    final success = await Navigator.push(
+                    await Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => PracticeScreen(sign: sign),
                       ),
                     );
-                    if (success == true) {
-                      _loadProgress();
-                    }
+                    // Always refresh progress when returning from practice!
+                    await _loadProgress();
                   },
                   icon: const Icon(Icons.camera_alt),
                   label: const Text('Practice Sign with Camera'),
@@ -253,7 +354,7 @@ class _LearnScreenState extends State<LearnScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final practicedCount = learningStats['total_signs_practiced'] ?? learningStats['practiced_signs'] ?? 0;
+    final practicedCount = learningStats['total_signs_practiced'] ?? learningStats['practiced_signs'] ?? learningStats['total_practiced'] ?? 0;
     final masteredCount = learningStats['mastered_signs'] ?? learningStats['total_mastered'] ?? 0;
 
     return Scaffold(
@@ -302,13 +403,26 @@ class _LearnScreenState extends State<LearnScreen> {
                           color: Colors.white,
                         ),
                       ),
-                      Text(
-                        'Total Signs: ${signs.length}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white70,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            'Total Signs: ${signs.length}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: _loadProgress,
+                            child: const Icon(
+                              Icons.refresh,
+                              color: Colors.white70,
+                              size: 18,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),

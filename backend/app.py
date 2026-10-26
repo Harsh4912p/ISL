@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from config import config
@@ -21,8 +21,8 @@ except Exception:
 import sys
 if hasattr(sys.stdout, 'reconfigure'):
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
 
@@ -43,7 +43,7 @@ def create_app(config_name='development'):
 
     db.init_app(app)
     JWTManager(app)
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'videos'), exist_ok=True)
@@ -60,29 +60,35 @@ def create_app(config_name='development'):
 
     @app.before_request
     def before_request():
-        request.start_time = datetime.now()
-        print(f"\n{'='*60}")
-        print(f"📨 INCOMING REQUEST: {datetime.now()}")
-        print(f"Method: {request.method}")
-        print(f"Path: {request.path}")
-        print(f"Remote Address: {request.remote_addr}")
-        print(f"User Agent: {request.user_agent}")
-        print(f"Content Type: {request.content_type}")
-        if request.data:
-            print(f"Body: {request.data[:500]}")
-        print(f"{'='*60}\n")
+        try:
+            request.start_time = datetime.now()
+            print(f"\n{'='*60}")
+            print(f"📨 INCOMING REQUEST: {datetime.now()}")
+            print(f"Method: {request.method}")
+            print(f"Path: {request.path}")
+            print(f"Remote Address: {request.remote_addr}")
+            print(f"User Agent: {request.user_agent}")
+            print(f"Content Type: {request.content_type}")
+            if request.data:
+                print(f"Body: {request.data[:500]}")
+            print(f"{'='*60}\n")
+        except Exception:
+            pass
 
     @app.after_request
     def after_request(response):
-        if hasattr(request, 'start_time'):
-            duration = (datetime.now() - request.start_time).total_seconds()
-            print(f"\n{'='*60}")
-            print(f"✅ RESPONSE: {datetime.now()}")
-            print(f"Path: {request.path}")
-            print(f"Status: {response.status_code}")
-            print(f"Duration: {duration:.3f}s")
-            print(f"Response Size: {len(response.data)} bytes")
-            print(f"{'='*60}\n")
+        try:
+            if hasattr(request, 'start_time'):
+                duration = (datetime.now() - request.start_time).total_seconds()
+                print(f"\n{'='*60}")
+                print(f"✅ RESPONSE: {datetime.now()}")
+                print(f"Path: {request.path}")
+                print(f"Status: {response.status_code}")
+                print(f"Duration: {duration:.3f}s")
+                print(f"Response Size: {len(response.data)} bytes")
+                print(f"{'='*60}\n")
+        except Exception:
+            pass
         return response
 
     @app.errorhandler(404)
@@ -94,6 +100,28 @@ def create_app(config_name='development'):
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
+    @app.route('/', methods=['GET'])
+    def home_page():
+        try:
+            return render_template('index.html')
+        except Exception:
+            return jsonify({
+                'name': 'Sign Language Detection API',
+                'status': 'online',
+                'video_call': '/call',
+                'api_docs': '/api',
+                'health': '/health'
+            }), 200
+
+    @app.route('/call', methods=['GET'])
+    @app.route('/video-call', methods=['GET'])
+    @app.route('/call/<room_id>', methods=['GET'])
+    def call_page(room_id=None):
+        try:
+            return render_template('call.html', room_id=room_id)
+        except Exception as e:
+            return jsonify({'error': f'Failed to render call page: {str(e)}'}), 500
+
     @app.route('/api', methods=['GET'])
     def api_info():
         return jsonify({
@@ -101,8 +129,10 @@ def create_app(config_name='development'):
             'version': '1.0.0',
             'description': 'Backend API for real-time sign language detection and translation',
             'endpoints': {
+                'video_call': '/call',
                 'authentication': '/api/auth',
                 'detection': '/api/detection',
+                'calls_signaling': '/api/calls',
                 'utilities': '/api/utils'
             }
         }), 200
@@ -151,6 +181,9 @@ def create_app(config_name='development'):
     def _load_dataset_signs():
         """Load full ISL sign language dataset into database with keypoints and translations"""
         try:
+            if Sign.query.count() >= 90:
+                print(f"✅ Full ISL dataset verified: {Sign.query.count()} signs in db")
+                return
             from dataset_loader import DatasetLoader
             loader = DatasetLoader()
             count, message = loader.insert_signs_into_db()

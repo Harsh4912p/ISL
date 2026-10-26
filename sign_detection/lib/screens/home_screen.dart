@@ -164,12 +164,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       Expanded(
                         child: ElevatedButton(
                           onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const TranslateScreen(),
-                              ),
-                            );
+                            setState(() => _currentIndex = 1);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.deepPurple,
@@ -294,12 +289,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Expanded(
                       child: GestureDetector(
                         onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const TranslateScreen(),
-                            ),
-                          );
+                          setState(() => _currentIndex = 1);
                         },
                         child: Container(
                           padding: EdgeInsets.all(20),
@@ -444,7 +434,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildTranslateScreen() {
-    return const TranslateScreen();
+    return TranslateScreen(isActive: _currentIndex == 1);
   }
 
   Widget _buildCallsScreen() {

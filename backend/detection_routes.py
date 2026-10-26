@@ -13,7 +13,7 @@ from io import BytesIO
 
 detection_bp = Blueprint('detection', __name__, url_prefix='/api/detection')
 
-video_processor = VideoProcessor(eager_init=True)
+video_processor = VideoProcessor(eager_init=False)
 
 @detection_bp.route('/signs', methods=['GET'])
 def get_all_signs():
@@ -82,21 +82,22 @@ def get_signs_by_category(category):
         return jsonify({'error': f'Failed to fetch signs: {str(e)}'}), 500
 
 @detection_bp.route('/detect-frame', methods=['POST'])
-@jwt_required()
+@jwt_required(optional=True)
 def detect_from_frame():
     try:
         user_id = get_jwt_identity()
-        data = request.get_json()
-        # Debug: log incoming request payload (truncated for brevity)
-        print('DEBUG: Received detection request payload keys:', list(data.keys()))
+        data = request.get_json() or {}
 
         if 'frame' not in data:
             return jsonify({'error': 'No frame provided'}), 400
 
         frame_data = data['frame']
-        min_confidence = data.get('min_confidence', 0.5)
+        raw_min_conf = data.get('min_confidence')
+        min_confidence = float(raw_min_conf) if raw_min_conf is not None else 0.2
 
         if isinstance(frame_data, str):
+            if "base64," in frame_data:
+                frame_data = frame_data.split("base64,")[1]
             try:
                 frame_bytes = base64.b64decode(frame_data)
                 image = Image.open(BytesIO(frame_bytes))
@@ -109,42 +110,99 @@ def detect_from_frame():
 
         target_sign = data.get('target_sign')
 
-        result = video_processor.process_camera_frame(frame, min_confidence)
-        # Debug: log the detection result
-        print('DEBUG: Detection result:', result)
+        # Run core frame processing with low threshold so candidate hand detections are not lost
+        detector = video_processor._get_detector()
+        landmarks = detector.extract_landmarks(frame)
+        face_res = detector.process_face(frame)
 
-        # If a practice target sign is specified, validate matching core gesture
-        if target_sign and result.get('sign'):
-            from train_sign_detection_model import SIGN_TO_CORE_GESTURE
-            predicted_core = result['sign'].upper()
-            target_core = SIGN_TO_CORE_GESTURE.get(target_sign.upper())
-            if predicted_core == target_core:
-                result['sign'] = target_sign
-                result['confidence'] = max(result.get('confidence', 0.0), 0.95)
+        result = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'face_detected': face_res.get('face_detected', False),
+            'face_bbox': face_res.get('face_bbox'),
+            'expression': face_res.get('expression', 'Unknown'),
+            'facial_patterns': face_res.get('facial_patterns', {}),
+            'sign': None,
+            'translation_en': None,
+            'translation_hi': None,
+            'confidence': 0.0,
+            'matched': False,
+            'feedback': 'Position your hand inside the camera view'
+        }
 
-        if result.get('sign'):
-            sign = Sign.query.filter_by(name=result['sign']).first()
+        if landmarks is not None:
+            if target_sign:
+                # 🎯 Practice / Learning Mode: Direct target sign match evaluation
+                target_clean = str(target_sign).strip()
+                target_db_sign = Sign.query.filter(
+                    (Sign.name.ilike(target_clean)) |
+                    (Sign.english_translation.ilike(f"%{target_clean}%"))
+                ).first()
 
-            history_entry = UserHistory(
-                user_id=user_id,
-                sign_id=sign.id if sign else None,
-                detected_text=result['sign'],
-                confidence=result['confidence'],
-                detection_type='frame',
-                source='camera'
-            )
+                keypoints = target_db_sign.keypoints_data if target_db_sign else None
+                sign_display_name = target_db_sign.name if target_db_sign else target_clean
 
-            db.session.add(history_entry)
-            db.session.commit()
+                match_res = detector.evaluate_target_sign_match(landmarks, sign_display_name, keypoints)
+                result['sign'] = match_res.get('sign')
+                result['confidence'] = match_res.get('confidence', 0.0)
+                result['matched'] = match_res.get('matched', False)
+                result['feedback'] = match_res.get('feedback', '')
+
+                if result['matched']:
+                    result['sign'] = sign_display_name
+            else:
+                # 🌐 Translate Mode: General gesture prediction
+                pred = detector.predict_sign(landmarks)
+                if pred.get('success') and pred.get('confidence', 0.0) >= min_confidence:
+                    result['sign'] = pred.get('sign')
+                    result['confidence'] = pred.get('confidence', 0.0)
+                    result['matched'] = True
+                    result['feedback'] = f"Detected: {pred.get('sign')}"
+        else:
+            result['feedback'] = 'No hand detected. Bring your hand into the frame.'
+
+        # If a valid sign was identified, link with database translations
+        if result.get('sign') and result['sign'] != 'Unknown':
+            sign = Sign.query.filter(Sign.name.ilike(result['sign'])).first()
+            if sign:
+                result['sign'] = sign.name
+                result['translation_en'] = sign.english_translation or sign.name
+                result['translation_hi'] = sign.hindi_translation or sign.name
+            else:
+                result['translation_en'] = str(result['sign']).title()
+                result['translation_hi'] = str(result['sign'])
+
+            if user_id:
+                try:
+                    history_entry = UserHistory(
+                        user_id=user_id,
+                        sign_id=sign.id if sign else None,
+                        detected_text=result['sign'],
+                        confidence=result['confidence'],
+                        detection_type='frame',
+                        source='practice' if target_sign else 'translate'
+                    )
+                    db.session.add(history_entry)
+                    db.session.commit()
+                except Exception as e:
+                    db.session.rollback()
+        landmarks_list = None
+        if landmarks is not None and len(landmarks) >= 42:
+            landmarks_list = [{'x': round(float(landmarks[i * 2]), 4), 'y': round(float(landmarks[i * 2 + 1]), 4)} for i in range(21)]
 
         return jsonify({
             'sign': result.get('sign'),
+            'translation_en': result.get('translation_en'),
+            'translation_hi': result.get('translation_hi'),
             'confidence': result.get('confidence'),
+            'matched': result.get('matched', False),
+            'feedback': result.get('feedback', ''),
             'timestamp': result.get('timestamp'),
             'face_detected': result.get('face_detected', False),
             'face_bbox': result.get('face_bbox'),
             'expression': result.get('expression', 'Unknown'),
-            'facial_patterns': result.get('facial_patterns', {})
+            'facial_patterns': result.get('facial_patterns', {}),
+            'hand_detected': landmarks is not None,
+            'landmarks': landmarks_list
         }), 200
 
     except Exception as e:
