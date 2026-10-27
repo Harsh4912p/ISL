@@ -1031,25 +1031,27 @@ class _TranslateScreenState extends State<TranslateScreen> {
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () {
-                        if (_frameTimer != null && _frameTimer!.isActive) {
-                          _frameTimer?.cancel();
+                        if (_isLoopRunning) {
                           setState(() {
+                            _isLoopRunning = false;
                             _detectedSign = 'Detection paused';
                             _confidence = 0.0;
                           });
                         } else {
-                          _startDetectionTimer();
+                          setState(() {
+                            _startDetectionLoop();
+                          });
                         }
                       },
                       icon: Icon(
-                        _frameTimer != null && _frameTimer!.isActive
+                        _isLoopRunning
                             ? Icons.pause
                             : Icons.play_arrow,
                       ),
                       label: Text(
-                        _frameTimer != null && _frameTimer!.isActive
-                            ? 'Pause Camera'
-                            : 'Resume Camera',
+                        _isLoopRunning
+                            ? 'Pause Detection'
+                            : 'Resume Detection',
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.deepPurple,
